@@ -1,0 +1,13 @@
+FROM confluentinc/cp-kafka:7.4.0
+
+# Switch to root user to modify permissions
+USER root
+
+# Copy the initialization script
+COPY scripts/init-kafka-topics.sh /usr/local/bin/init-kafka-topics.sh
+
+# Fix line endings (convert Windows CRLF to Unix LF) and make it executable
+RUN sed -i 's/\r$//' /usr/local/bin/init-kafka-topics.sh && chmod +x /usr/local/bin/init-kafka-topics.sh
+
+# Set the entrypoint to run our initialization script
+ENTRYPOINT ["/usr/local/bin/init-kafka-topics.sh"]
