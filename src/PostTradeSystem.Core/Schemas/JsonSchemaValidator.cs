@@ -1,0 +1,79 @@
+using System.Text.Json;
+using System.Text.Json.Nodes;
+
+namespace PostTradeSystem.Core.Schemas;
+
+public class JsonSchemaValidator
+{
+    private readonly Dictionary<string, JsonNode> _schemas = new();
+
+    public void RegisterSchema(string messageType, string jsonSchema)
+    {
+        var schemaNode = JsonNode.Parse(jsonSchema);
+        if (schemaNode != null)
+        {
+            _schemas[messageType] = schemaNode;
+        }
+    }
+
+    public bool ValidateMessage(string messageType, string jsonMessage)
+    {
+        if (!_schemas.ContainsKey(messageType))
+        {
+            return false;
+        }
+
+        try
+        {
+            var messageNode = JsonNode.Parse(jsonMessage);
+            return messageNode != null && ValidateAgainstSchema(messageNode, _schemas[messageType]);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static bool ValidateAgainstSchema(JsonNode message, JsonNode schema)
+    {
+        var schemaProperties = schema["properties"]?.AsObject();
+        if (schemaProperties == null) return true;
+
+        var messageObject = message.AsObject();
+        
+        foreach (var property in schemaProperties)
+        {
+            var propertySchema = property.Value;
+            var required = propertySchema?["required"]?.GetValue<bool>() ?? false;
+            
+            if (required && !messageObject.ContainsKey(property.Key))
+            {
+                return false;
+            }
+
+            if (messageObject.TryGetPropertyValue(property.Key, out var value) && value != null)
+            {
+                var expectedType = propertySchema?["type"]?.GetValue<string>();
+                if (!ValidateType(value, expectedType))
+                {
+                    return false;
+                }
+            }
+        }
+
+        return true;
+    }
+
+    private static bool ValidateType(JsonNode value, string? expectedType)
+    {
+        return expectedType switch
+        {
+            "string" => value.GetValueKind() == JsonValueKind.String,
+            "number" => value.GetValueKind() is JsonValueKind.Number,
+            "boolean" => value.GetValueKind() == JsonValueKind.True || value.GetValueKind() == JsonValueKind.False,
+            "object" => value.GetValueKind() == JsonValueKind.Object,
+            "array" => value.GetValueKind() == JsonValueKind.Array,
+            _ => true
+        };
+    }
+}
