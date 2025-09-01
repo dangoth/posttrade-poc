@@ -5,7 +5,7 @@ namespace PostTradeSystem.Core.Aggregates;
 public abstract class AggregateRootBase : IAggregateRoot
 {
     private readonly List<IDomainEvent> _uncommittedEvents = new();
-    private long _eventSequence = 0;
+    protected long _eventSequence = 0;
 
     protected AggregateRootBase(string id, string partitionKey)
     {
