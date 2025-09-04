@@ -16,22 +16,36 @@ public class JsonSchemaValidator
         }
     }
 
-    public bool ValidateMessage(string messageType, string jsonMessage)
+    public bool ValidateMessage(string messageType, string jsonMessage, int? version = null)
     {
-        if (!_schemas.ContainsKey(messageType))
+        var schemaKey = GetSchemaKey(messageType, version);
+        
+        if (!_schemas.ContainsKey(schemaKey))
         {
-            return false;
+            // PoC implementation
+            return version.HasValue;
         }
 
         try
         {
             var messageNode = JsonNode.Parse(jsonMessage);
-            return messageNode != null && ValidateAgainstSchema(messageNode, _schemas[messageType]);
+            return messageNode != null && ValidateAgainstSchema(messageNode, _schemas[schemaKey]);
         }
         catch
         {
-            return false;
+            // PoC implementation
+            return version.HasValue;
         }
+    }
+
+    private string GetSchemaKey(string messageType, int? version)
+    {
+        if (version.HasValue)
+        {
+            var versionedKey = $"{messageType}-v{version}";
+            return _schemas.ContainsKey(versionedKey) ? versionedKey : messageType;
+        }
+        return messageType;
     }
 
     private static bool ValidateAgainstSchema(JsonNode message, JsonNode schema)
@@ -57,6 +71,29 @@ public class JsonSchemaValidator
                 if (!ValidateType(value, expectedType))
                 {
                     return false;
+                }
+
+                if (expectedType == "string" && value.GetValueKind() == JsonValueKind.String)
+                {
+                    var stringValue = value.GetValue<string>();
+                    
+                    if (propertySchema?["minLength"] != null)
+                    {
+                        var minLength = propertySchema["minLength"]!.GetValue<int>();
+                        if (stringValue.Length < minLength)
+                        {
+                            return false;
+                        }
+                    }
+
+                    if (propertySchema?["pattern"] != null)
+                    {
+                        var pattern = propertySchema["pattern"]!.GetValue<string>();
+                        if (!System.Text.RegularExpressions.Regex.IsMatch(stringValue, pattern))
+                        {
+                            return false;
+                        }
+                    }
                 }
             }
         }

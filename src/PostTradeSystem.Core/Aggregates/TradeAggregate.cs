@@ -77,63 +77,65 @@ public class TradeAggregate : AggregateRootBase
         if (_status == newStatus)
             return;
 
-        if (newStatus != TradeStatus.Failed && (int)newStatus < (int)_status)
-        {
-            throw new InvalidOperationException($"Cannot change status from {_status} to {newStatus}");
-        }
+        ValidateStatusTransition(newStatus);
 
-        var statusChangedEvent = new TradeStatusChangedEvent(
-            Id,
-            _status.ToString(),
-            newStatus.ToString(),
-            reason,
-            _eventSequence + 1,
-            correlationId,
-            causedBy);
+        var statusChangedEvent = CreateTradeEvent(
+            (version, corrId, causedByParam) => new TradeStatusChangedEvent(
+                Id, _status.ToString(), newStatus.ToString(), reason, version, corrId, causedByParam),
+            correlationId, causedBy);
 
         ApplyEvent(statusChangedEvent);
     }
 
     public void UpdateTradeDetails(Dictionary<string, object> updates, string correlationId, string causedBy)
     {
-        if (_status == TradeStatus.Settled)
-        {
-            throw new InvalidOperationException("Cannot update a settled trade");
-        }
+        ValidateTradeCanBeUpdated();
 
-        var tradeUpdatedEvent = new TradeUpdatedEvent(
-            Id,
-            updates,
-            _eventSequence + 1,
-            correlationId,
-            causedBy);
+        var tradeUpdatedEvent = CreateTradeEvent(
+            (version, corrId, causedByParam) => new TradeUpdatedEvent(Id, updates, version, corrId, causedByParam),
+            correlationId, causedBy);
 
         ApplyEvent(tradeUpdatedEvent);
     }
 
     public void EnrichTrade(string enrichmentType, Dictionary<string, object> enrichmentData, string correlationId, string causedBy)
     {
-        var tradeEnrichedEvent = new TradeEnrichedEvent(
-            Id,
-            enrichmentType,
-            enrichmentData,
-            _eventSequence + 1,
-            correlationId,
-            causedBy);
+        var tradeEnrichedEvent = CreateTradeEvent(
+            (version, corrId, causedByParam) => new TradeEnrichedEvent(Id, enrichmentType, enrichmentData, version, corrId, causedByParam),
+            correlationId, causedBy);
 
         ApplyEvent(tradeEnrichedEvent);
     }
 
     public void RecordValidationFailure(List<string> validationErrors, string correlationId, string causedBy)
     {
-        var validationFailedEvent = new TradeValidationFailedEvent(
-            Id,
-            validationErrors,
-            _eventSequence + 1,
-            correlationId,
-            causedBy);
+        var validationFailedEvent = CreateTradeEvent(
+            (version, corrId, causedByParam) => new TradeValidationFailedEvent(Id, validationErrors, version, corrId, causedByParam),
+            correlationId, causedBy);
 
         ApplyEvent(validationFailedEvent);
+    }
+
+    private void ValidateStatusTransition(TradeStatus newStatus)
+    {
+        if (newStatus != TradeStatus.Failed && (int)newStatus < (int)_status)
+        {
+            throw new InvalidOperationException($"Cannot change status from {_status} to {newStatus}");
+        }
+    }
+
+    private void ValidateTradeCanBeUpdated()
+    {
+        if (_status == TradeStatus.Settled)
+        {
+            throw new InvalidOperationException("Cannot update a settled trade");
+        }
+    }
+
+    private T CreateTradeEvent<T>(Func<long, string, string, T> eventFactory, string correlationId, string causedBy) 
+        where T : IDomainEvent
+    {
+        return eventFactory(_eventSequence + 1, correlationId, causedBy);
     }
 
     protected override void ApplyEventToState(IDomainEvent domainEvent)
