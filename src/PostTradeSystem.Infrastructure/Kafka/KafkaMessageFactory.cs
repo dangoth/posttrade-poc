@@ -4,9 +4,7 @@ using System.Text.Json;
 namespace PostTradeSystem.Infrastructure.Kafka;
 public static class KafkaMessageFactory
 {
-    /// <summary>
-    /// Creates a standardized trade message envelope
-    /// </summary>
+    // Creates a standardized trade message envelope
     public static TradeMessageEnvelope<T> CreateTradeMessageEnvelope<T>(T message, string? correlationId = null) 
         where T : TradeMessage
     {
@@ -21,9 +19,7 @@ public static class KafkaMessageFactory
         };
     }
 
-    /// <summary>
-    /// Creates standard headers for trade messages
-    /// </summary>
+    // Creates standard headers for trade messages
     public static Dictionary<string, string> CreateStandardHeaders(TradeMessage message)
     {
         return new Dictionary<string, string>
@@ -34,9 +30,7 @@ public static class KafkaMessageFactory
         };
     }
 
-    /// <summary>
-    /// Creates Kafka message headers from envelope headers
-    /// </summary>
+    // Creates Kafka message headers from envelope headers
     public static Dictionary<string, byte[]> CreateKafkaHeaders(TradeMessage message)
     {
         return new Dictionary<string, byte[]>
@@ -47,9 +41,7 @@ public static class KafkaMessageFactory
         };
     }
 
-    /// <summary>
-    /// Serializes message envelope to JSON with standard options
-    /// </summary>
+    // Serializes message envelope to JSON with standard options
     public static string SerializeEnvelope<T>(TradeMessageEnvelope<T> envelope) where T : TradeMessage
     {
         var jsonOptions = new JsonSerializerOptions

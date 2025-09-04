@@ -5,9 +5,7 @@ namespace PostTradeSystem.Core.Helpers;
 
 public static class TradePropertyMapper
 {
-    /// <summary>
-    /// Maps base trade properties from TradeBase to TradeMessage
-    /// </summary>
+    // Maps base trade properties from TradeBase to TradeMessage
     public static void MapBaseTradeProperties(TradeBase trade, TradeMessage message)
     {
         message.TradeId = trade.TradeId;
@@ -22,9 +20,7 @@ public static class TradePropertyMapper
         message.CounterpartyId = trade.CounterpartyId;
     }
 
-    /// <summary>
-    /// Maps base trade properties from TradeMessage to TradeBase
-    /// </summary>
+    // Maps base trade properties from TradeMessage to TradeBase
     public static void MapBaseTradeProperties(TradeMessage message, TradeBase trade)
     {
         trade.TradeId = message.TradeId;
@@ -39,9 +35,7 @@ public static class TradePropertyMapper
         trade.CounterpartyId = message.CounterpartyId;
     }
 
-    /// <summary>
-    /// Creates a partition key for trade-related messages
-    /// </summary>
+    // Creates a partition key for trade-related messages
     public static string CreatePartitionKey(string traderId, string instrumentId)
     {
         return $"{traderId}:{instrumentId}";

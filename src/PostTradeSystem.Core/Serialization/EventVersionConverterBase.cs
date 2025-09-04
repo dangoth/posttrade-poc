@@ -9,25 +9,19 @@ public abstract class EventVersionConverterBase<TFrom, TTo> : IEventVersionConve
     
     public abstract bool CanConvert(int fromVersion, int toVersion);
 
-    /// <summary>
-    /// Helper method to copy base properties from source to target
-    /// </summary>
+    // Helper method to copy base properties from source to target
     protected static void CopyBaseProperties(TFrom source, TTo target)
     {
         EventContractPropertyMapper.MapBaseProperties(source, target);
     }
 
-    /// <summary>
-    /// Helper method to copy dictionary properties safely
-    /// </summary>
+    // Helper method to copy dictionary properties safely
     protected static Dictionary<string, object> CopyDictionary(Dictionary<string, object> source)
     {
         return new Dictionary<string, object>(source);
     }
 
-    /// <summary>
-    /// Helper method to determine regulatory classification based on trade type
-    /// </summary>
+    // Helper method to determine regulatory classification based on trade type
     protected static string DetermineRegulatoryClassification(string tradeType)
     {
         return tradeType.ToUpper() switch
@@ -39,17 +33,13 @@ public abstract class EventVersionConverterBase<TFrom, TTo> : IEventVersionConve
         };
     }
 
-    /// <summary>
-    /// Helper method to calculate notional value
-    /// </summary>
+    // Helper method to calculate notional value
     protected static decimal CalculateNotionalValue(decimal quantity, decimal price)
     {
         return quantity * price;
     }
 
-    /// <summary>
-    /// Helper method to create audit trail message
-    /// </summary>
+    // Helper method to create audit trail message
     protected static string CreateAuditTrail(string previousStatus, string newStatus, string reason)
     {
         return $"Status changed from {previousStatus} to {newStatus}. Reason: {reason}";

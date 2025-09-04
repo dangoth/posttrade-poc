@@ -4,9 +4,7 @@ using System.Text.Json.Serialization;
 namespace PostTradeSystem.Core.Serialization;
 public static class JsonConverterFactory
 {
-    /// <summary>
-    /// Creates standard JSON serializer options for event serialization
-    /// </summary>
+    // Creates standard JSON serializer options for event serialization
     public static JsonSerializerOptions CreateEventSerializationOptions()
     {
         return new JsonSerializerOptions
@@ -24,9 +22,7 @@ public static class JsonConverterFactory
         };
     }
 
-    /// <summary>
-    /// Creates standard JSON serializer options for message serialization
-    /// </summary>
+    // Creates standard JSON serializer options for message serialization
     public static JsonSerializerOptions CreateMessageSerializationOptions()
     {
         return new JsonSerializerOptions
@@ -36,9 +32,7 @@ public static class JsonConverterFactory
         };
     }
 
-    /// <summary>
-    /// Creates JSON serializer options with custom converters
-    /// </summary>
+    // Creates JSON serializer options with custom converters
     public static JsonSerializerOptions CreateCustomOptions(params JsonConverter[] additionalConverters)
     {
         var options = new JsonSerializerOptions

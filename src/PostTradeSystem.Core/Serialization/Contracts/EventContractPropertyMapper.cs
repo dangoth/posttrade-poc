@@ -4,9 +4,7 @@ namespace PostTradeSystem.Core.Serialization.Contracts;
 
 public static class EventContractPropertyMapper
 {
-    /// <summary>
-    /// Maps base domain event properties to event contract
-    /// </summary>
+    // Maps base domain event properties to event contract
     public static void MapBaseProperties(IDomainEvent domainEvent, BaseEventContract contract)
     {
         contract.EventId = domainEvent.EventId;
@@ -18,9 +16,7 @@ public static class EventContractPropertyMapper
         contract.CausedBy = domainEvent.CausedBy;
     }
 
-    /// <summary>
-    /// Maps base properties from one contract to another (for version conversion)
-    /// </summary>
+    // Maps base properties from one contract to another (for version conversion)
     public static void MapBaseProperties(BaseEventContract source, BaseEventContract target)
     {
         target.EventId = source.EventId;
