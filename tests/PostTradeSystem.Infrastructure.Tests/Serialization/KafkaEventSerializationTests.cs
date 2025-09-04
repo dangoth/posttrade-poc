@@ -28,7 +28,7 @@ public class KafkaEventSerializationTests
         EventSerializationConfiguration.Configure(_registry);
         
         var schemaRegistrationService = new SchemaRegistrationService(_schemaRegistry, _validator);
-        schemaRegistrationService.RegisterEventContractSchemasAsync().Wait();
+        Task.Run(async () => await schemaRegistrationService.RegisterEventContractSchemasAsync()).GetAwaiter().GetResult();
     }
 
     [Fact]

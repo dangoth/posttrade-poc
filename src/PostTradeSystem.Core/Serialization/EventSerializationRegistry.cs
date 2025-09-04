@@ -56,7 +56,8 @@ public class EventSerializationRegistry
 
     public IVersionedEventContract ConvertFromDomainEvent(IDomainEvent domainEvent, int targetVersion)
     {
-        var eventType = domainEvent.GetType().Name.Replace("Event", "");
+        var typeName = domainEvent.GetType().Name;
+        var eventType = typeName.EndsWith("Event") ? typeName[..^5] : typeName;
         
         if (!_eventTypes.TryGetValue(eventType, out var registry))
         {

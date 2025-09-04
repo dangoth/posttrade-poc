@@ -17,65 +17,46 @@ public class SchemaRegistrationService
 
     public async Task RegisterEventContractSchemasAsync()
     {
-        await RegisterTradeCreatedEventSchemasAsync();
-        await RegisterTradeStatusChangedEventSchemasAsync();
-        await RegisterTradeUpdatedEventSchemasAsync();
-        await RegisterTradeEnrichedEventSchemasAsync();
-        await RegisterTradeValidationFailedEventSchemasAsync();
+        var eventRegistrations = new[]
+        {
+            new EventRegistration("TradeCreated", new[] { typeof(TradeCreatedEventV1), typeof(TradeCreatedEventV2) }),
+            new EventRegistration("TradeStatusChanged", new[] { typeof(TradeStatusChangedEventV1), typeof(TradeStatusChangedEventV2) }),
+            new EventRegistration("TradeUpdated", new[] { typeof(TradeUpdatedEventV1) }),
+            new EventRegistration("TradeEnriched", new[] { typeof(TradeEnrichedEventV1) }),
+            new EventRegistration("TradeValidationFailed", new[] { typeof(TradeValidationFailedEventV1) })
+        };
+
+        foreach (var registration in eventRegistrations)
+        {
+            await RegisterEventSchemasAsync(registration);
+        }
     }
 
-    private async Task RegisterTradeCreatedEventSchemasAsync()
+    private async Task RegisterEventSchemasAsync(EventRegistration registration)
     {
-        var v1Schema = GenerateSchemaForContract(typeof(TradeCreatedEventV1));
-        var v2Schema = GenerateSchemaForContract(typeof(TradeCreatedEventV2));
-
-        await _schemaRegistry.RegisterSchemaAsync("event-tradecreated-v1", v1Schema);
-        await _schemaRegistry.RegisterSchemaAsync("event-tradecreated-v2", v2Schema);
-
-        _validator.RegisterSchema("TradeCreated-v1", v1Schema);
-        _validator.RegisterSchema("TradeCreated-v2", v2Schema);
-        _validator.RegisterSchema("TradeCreated", v2Schema);
+        var schemas = new List<(int version, string schema)>();
+        
+        for (int i = 0; i < registration.ContractTypes.Length; i++)
+        {
+            var version = i + 1;
+            var schema = GenerateSchemaForContract(registration.ContractTypes[i]);
+            schemas.Add((version, schema));
+            
+            var subjectName = $"event-{registration.EventName.ToLower()}-v{version}";
+            await _schemaRegistry.RegisterSchemaAsync(subjectName, schema);
+            
+            _validator.RegisterSchema($"{registration.EventName}-v{version}", schema);
+        }
+        
+        // Register the latest version as the default
+        if (schemas.Count > 0)
+        {
+            var latestSchema = schemas.Last().schema;
+            _validator.RegisterSchema(registration.EventName, latestSchema);
+        }
     }
 
-    private async Task RegisterTradeStatusChangedEventSchemasAsync()
-    {
-        var v1Schema = GenerateSchemaForContract(typeof(TradeStatusChangedEventV1));
-        var v2Schema = GenerateSchemaForContract(typeof(TradeStatusChangedEventV2));
-
-        await _schemaRegistry.RegisterSchemaAsync("event-tradestatuschanged-v1", v1Schema);
-        await _schemaRegistry.RegisterSchemaAsync("event-tradestatuschanged-v2", v2Schema);
-
-        _validator.RegisterSchema("TradeStatusChanged-v1", v1Schema);
-        _validator.RegisterSchema("TradeStatusChanged-v2", v2Schema);
-        _validator.RegisterSchema("TradeStatusChanged", v2Schema);
-    }
-
-    private async Task RegisterTradeUpdatedEventSchemasAsync()
-    {
-        var v1Schema = GenerateSchemaForContract(typeof(TradeUpdatedEventV1));
-
-        await _schemaRegistry.RegisterSchemaAsync("event-tradeupdated-v1", v1Schema);
-        _validator.RegisterSchema("TradeUpdated-v1", v1Schema);
-        _validator.RegisterSchema("TradeUpdated", v1Schema);
-    }
-
-    private async Task RegisterTradeEnrichedEventSchemasAsync()
-    {
-        var v1Schema = GenerateSchemaForContract(typeof(TradeEnrichedEventV1));
-
-        await _schemaRegistry.RegisterSchemaAsync("event-tradeenriched-v1", v1Schema);
-        _validator.RegisterSchema("TradeEnriched-v1", v1Schema);
-        _validator.RegisterSchema("TradeEnriched", v1Schema);
-    }
-
-    private async Task RegisterTradeValidationFailedEventSchemasAsync()
-    {
-        var v1Schema = GenerateSchemaForContract(typeof(TradeValidationFailedEventV1));
-
-        await _schemaRegistry.RegisterSchemaAsync("event-tradevalidationfailed-v1", v1Schema);
-        _validator.RegisterSchema("TradeValidationFailed-v1", v1Schema);
-        _validator.RegisterSchema("TradeValidationFailed", v1Schema);
-    }
+    private record EventRegistration(string EventName, Type[] ContractTypes);
 
     private static string GenerateSchemaForContract(Type contractType)
     {

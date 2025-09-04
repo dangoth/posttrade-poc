@@ -16,11 +16,13 @@ public static class EventSerializationConfiguration
 
     private static void ConfigureTradeCreatedEvent(EventSerializationRegistry registry)
     {
-        registry.RegisterContract(
-            domainEvent => ConvertTradeCreatedEventToV1((TradeCreatedEvent)domainEvent),
+        // Register V1 for deserialization only (register first so V2 becomes latest)
+        registry.RegisterContract<TradeCreatedEventV1>(
+            domainEvent => throw new InvalidOperationException("V1 should not be used for serialization"),
             contract => ConvertV1ToTradeCreatedEvent(contract));
 
-        registry.RegisterContract(
+        // Register V2 for both serialization and deserialization (this becomes the latest)
+        registry.RegisterContract<TradeCreatedEventV2>(
             domainEvent => ConvertTradeCreatedEventToV2((TradeCreatedEvent)domainEvent),
             contract => ConvertV2ToTradeCreatedEvent(contract));
 
@@ -30,11 +32,13 @@ public static class EventSerializationConfiguration
 
     private static void ConfigureTradeStatusChangedEvent(EventSerializationRegistry registry)
     {
-        registry.RegisterContract(
-            domainEvent => ConvertTradeStatusChangedEventToV1((TradeStatusChangedEvent)domainEvent),
+        // Register V1 for deserialization only (register first so V2 becomes latest)
+        registry.RegisterContract<TradeStatusChangedEventV1>(
+            domainEvent => throw new InvalidOperationException("V1 should not be used for serialization"),
             contract => ConvertV1ToTradeStatusChangedEvent(contract));
 
-        registry.RegisterContract(
+        // Register V2 for both serialization and deserialization (this becomes the latest)
+        registry.RegisterContract<TradeStatusChangedEventV2>(
             domainEvent => ConvertTradeStatusChangedEventToV2((TradeStatusChangedEvent)domainEvent),
             contract => ConvertV2ToTradeStatusChangedEvent(contract));
 
@@ -63,9 +67,10 @@ public static class EventSerializationConfiguration
             contract => ConvertV1ToTradeValidationFailedEvent(contract));
     }
 
-    private static TradeCreatedEventV1 ConvertTradeCreatedEventToV1(TradeCreatedEvent domainEvent)
+
+    private static TradeCreatedEventV2 ConvertTradeCreatedEventToV2(TradeCreatedEvent domainEvent)
     {
-        return new TradeCreatedEventV1
+        return new TradeCreatedEventV2
         {
             EventId = domainEvent.EventId,
             AggregateId = domainEvent.AggregateId,
@@ -83,15 +88,24 @@ public static class EventSerializationConfiguration
             Currency = domainEvent.Currency,
             CounterpartyId = domainEvent.CounterpartyId,
             TradeType = domainEvent.TradeType,
-            AdditionalData = new Dictionary<string, object>(domainEvent.AdditionalData)
+            AdditionalData = new Dictionary<string, object>(domainEvent.AdditionalData),
+            
+            // V2 specific fields with default values
+            RiskProfile = "STANDARD",
+            NotionalValue = domainEvent.Quantity * domainEvent.Price,
+            RegulatoryClassification = DetermineRegulatoryClassification(domainEvent.TradeType)
         };
     }
 
-    private static TradeCreatedEventV2 ConvertTradeCreatedEventToV2(TradeCreatedEvent domainEvent)
+    private static string DetermineRegulatoryClassification(string tradeType)
     {
-        var v1 = ConvertTradeCreatedEventToV1(domainEvent);
-        var converter = new TradeCreatedEventV1ToV2Converter();
-        return converter.Convert(v1);
+        return tradeType.ToUpper() switch
+        {
+            "EQUITY" => "MiFID_II_EQUITY",
+            "OPTION" => "MiFID_II_DERIVATIVE",
+            "FX" => "EMIR_FX",
+            _ => "UNCLASSIFIED"
+        };
     }
 
     private static TradeCreatedEvent ConvertV1ToTradeCreatedEvent(TradeCreatedEventV1 contract)
@@ -139,9 +153,9 @@ public static class EventSerializationConfiguration
             additionalData);
     }
 
-    private static TradeStatusChangedEventV1 ConvertTradeStatusChangedEventToV1(TradeStatusChangedEvent domainEvent)
+    private static TradeStatusChangedEventV2 ConvertTradeStatusChangedEventToV2(TradeStatusChangedEvent domainEvent)
     {
-        return new TradeStatusChangedEventV1
+        return new TradeStatusChangedEventV2
         {
             EventId = domainEvent.EventId,
             AggregateId = domainEvent.AggregateId,
@@ -152,15 +166,13 @@ public static class EventSerializationConfiguration
             CausedBy = domainEvent.CausedBy,
             PreviousStatus = domainEvent.PreviousStatus,
             NewStatus = domainEvent.NewStatus,
-            Reason = domainEvent.Reason
+            Reason = domainEvent.Reason,
+            
+            // V2 specific fields with default values
+            ApprovedBy = domainEvent.CausedBy,
+            ApprovalTimestamp = domainEvent.OccurredAt,
+            AuditTrail = $"Status changed from {domainEvent.PreviousStatus} to {domainEvent.NewStatus}. Reason: {domainEvent.Reason}"
         };
-    }
-
-    private static TradeStatusChangedEventV2 ConvertTradeStatusChangedEventToV2(TradeStatusChangedEvent domainEvent)
-    {
-        var v1 = ConvertTradeStatusChangedEventToV1(domainEvent);
-        var converter = new TradeStatusChangedEventV1ToV2Converter();
-        return converter.Convert(v1);
     }
 
     private static TradeStatusChangedEvent ConvertV1ToTradeStatusChangedEvent(TradeStatusChangedEventV1 contract)

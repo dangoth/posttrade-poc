@@ -16,33 +16,14 @@ public class JsonSchemaValidator
         }
     }
 
-    public bool ValidateMessage(string messageType, string jsonMessage)
+    public bool ValidateMessage(string messageType, string jsonMessage, int? version = null)
     {
-        if (!_schemas.ContainsKey(messageType))
-        {
-            return false;
-        }
-
-        try
-        {
-            var messageNode = JsonNode.Parse(jsonMessage);
-            return messageNode != null && ValidateAgainstSchema(messageNode, _schemas[messageType]);
-        }
-        catch
-        {
-            return false;
-        }
-    }
-
-    public bool ValidateMessage(string messageType, int version, string jsonMessage)
-    {
-        var versionedKey = $"{messageType}-v{version}";
-        var schemaKey = _schemas.ContainsKey(versionedKey) ? versionedKey : messageType;
+        var schemaKey = GetSchemaKey(messageType, version);
         
         if (!_schemas.ContainsKey(schemaKey))
         {
             // PoC implementation
-            return true;
+            return version.HasValue;
         }
 
         try
@@ -53,8 +34,18 @@ public class JsonSchemaValidator
         catch
         {
             // PoC implementation
-            return true;
+            return version.HasValue;
         }
+    }
+
+    private string GetSchemaKey(string messageType, int? version)
+    {
+        if (version.HasValue)
+        {
+            var versionedKey = $"{messageType}-v{version}";
+            return _schemas.ContainsKey(versionedKey) ? versionedKey : messageType;
+        }
+        return messageType;
     }
 
     private static bool ValidateAgainstSchema(JsonNode message, JsonNode schema)
