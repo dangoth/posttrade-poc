@@ -27,6 +27,23 @@ public class EventSerializationRegistry
         _converters[key] = converter;
     }
 
+    public void RegisterConverter(object converter)
+    {
+        var converterType = converter.GetType();
+        var interfaces = converterType.GetInterfaces()
+            .Where(i => i.IsGenericType && i.GetGenericTypeDefinition() == typeof(IEventVersionConverter<,>))
+            .ToArray();
+
+        foreach (var interfaceType in interfaces)
+        {
+            var genericArgs = interfaceType.GetGenericArguments();
+            var fromType = genericArgs[0];
+            var toType = genericArgs[1];
+            var key = $"{fromType.Name}->{toType.Name}";
+            _converters[key] = converter;
+        }
+    }
+
     public Type? GetContractType(string eventType, int version)
     {
         if (_eventTypes.TryGetValue(eventType, out var registry))

@@ -103,7 +103,7 @@ public class JsonEventSerializer : IEventSerializer
     {
         try
         {
-            var isValid = _validator.ValidateMessage(serializedEvent.EventType, serializedEvent.Version, serializedEvent.Data);
+            var isValid = _validator.ValidateMessage(serializedEvent.EventType, serializedEvent.Data, serializedEvent.Version);
             if (!isValid)
             {
                 // PoC implementation
