@@ -2,13 +2,13 @@ namespace PostTradeSystem.Core.Serialization;
 
 public interface IVersionedEventContract
 {
-    int Version { get; }
+    int SchemaVersion { get; }
     string EventType { get; }
 }
 
 public abstract class VersionedEventContractBase : IVersionedEventContract
 {
-    public abstract int Version { get; }
+    public abstract int SchemaVersion { get; }
     public abstract string EventType { get; }
 }
 

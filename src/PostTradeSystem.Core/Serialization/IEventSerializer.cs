@@ -6,13 +6,13 @@ public interface IEventSerializer
 {
     Task<SerializedEvent> Serialize(IDomainEvent domainEvent);
     IDomainEvent Deserialize(SerializedEvent serializedEvent);
-    bool CanHandle(string eventType, int version);
-    IEnumerable<int> GetSupportedVersions(string eventType);
+    bool CanHandle(string eventType, int schemaVersion);
+    IEnumerable<int> GetSupportedSchemaVersions(string eventType);
 }
 
 public record SerializedEvent(
     string EventType,
-    int Version,
+    int SchemaVersion,
     string Data,
     string SchemaId,
     DateTime SerializedAt,

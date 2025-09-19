@@ -13,10 +13,10 @@ public class EventSerializationRegistry
     {
         var contract = Activator.CreateInstance<T>();
         var eventType = contract.EventType;
-        var version = contract.Version;
+        var schemaVersion = contract.SchemaVersion;
 
         var registry = _eventTypes.GetOrAdd(eventType, _ => new EventTypeRegistry());
-        registry.RegisterVersion(version, typeof(T), fromDomainEvent, toDomainEvent);
+        registry.RegisterVersion(schemaVersion, typeof(T), fromDomainEvent, toDomainEvent);
     }
 
     public void RegisterConverter<TFrom, TTo>(IEventVersionConverter<TFrom, TTo> converter)
@@ -44,34 +44,34 @@ public class EventSerializationRegistry
         }
     }
 
-    public Type? GetContractType(string eventType, int version)
+    public Type? GetContractType(string eventType, int schemaVersion)
     {
         if (_eventTypes.TryGetValue(eventType, out var registry))
         {
-            return registry.GetContractType(version);
+            return registry.GetContractType(schemaVersion);
         }
         return null;
     }
 
-    public int GetLatestVersion(string eventType)
+    public int GetLatestSchemaVersion(string eventType)
     {
         if (_eventTypes.TryGetValue(eventType, out var registry))
         {
-            return registry.GetLatestVersion();
+            return registry.GetLatestSchemaVersion();
         }
         throw new ArgumentException($"Event type '{eventType}' not registered");
     }
 
-    public IEnumerable<int> GetSupportedVersions(string eventType)
+    public IEnumerable<int> GetSupportedSchemaVersions(string eventType)
     {
         if (_eventTypes.TryGetValue(eventType, out var registry))
         {
-            return registry.GetSupportedVersions();
+            return registry.GetSupportedSchemaVersions();
         }
         return Enumerable.Empty<int>();
     }
 
-    public IVersionedEventContract ConvertFromDomainEvent(IDomainEvent domainEvent, int targetVersion)
+    public IVersionedEventContract ConvertFromDomainEvent(IDomainEvent domainEvent, int targetSchemaVersion)
     {
         var typeName = domainEvent.GetType().Name;
         var eventType = typeName.EndsWith("Event") ? typeName[..^5] : typeName;
@@ -81,7 +81,7 @@ public class EventSerializationRegistry
             throw new ArgumentException($"Event type '{eventType}' not registered");
         }
 
-        return registry.ConvertFromDomainEvent(domainEvent, targetVersion);
+        return registry.ConvertFromDomainEvent(domainEvent, targetSchemaVersion);
     }
 
     public IDomainEvent ConvertToDomainEvent(IVersionedEventContract contract)
@@ -115,31 +115,31 @@ public class EventSerializationRegistry
     {
         private readonly ConcurrentDictionary<int, VersionInfo> _versions = new();
 
-        public void RegisterVersion(int version, Type contractType, object fromDomainEvent, object toDomainEvent)
+        public void RegisterVersion(int schemaVersion, Type contractType, object fromDomainEvent, object toDomainEvent)
         {
-            _versions[version] = new VersionInfo(contractType, fromDomainEvent, toDomainEvent);
+            _versions[schemaVersion] = new VersionInfo(contractType, fromDomainEvent, toDomainEvent);
         }
 
-        public Type? GetContractType(int version)
+        public Type? GetContractType(int schemaVersion)
         {
-            return _versions.TryGetValue(version, out var info) ? info.ContractType : null;
+            return _versions.TryGetValue(schemaVersion, out var info) ? info.ContractType : null;
         }
 
-        public int GetLatestVersion()
+        public int GetLatestSchemaVersion()
         {
             return _versions.Keys.Max();
         }
 
-        public IEnumerable<int> GetSupportedVersions()
+        public IEnumerable<int> GetSupportedSchemaVersions()
         {
             return _versions.Keys.OrderBy(v => v);
         }
 
-        public IVersionedEventContract ConvertFromDomainEvent(IDomainEvent domainEvent, int targetVersion)
+        public IVersionedEventContract ConvertFromDomainEvent(IDomainEvent domainEvent, int targetSchemaVersion)
         {
-            if (!_versions.TryGetValue(targetVersion, out var versionInfo))
+            if (!_versions.TryGetValue(targetSchemaVersion, out var versionInfo))
             {
-                throw new ArgumentException($"Version {targetVersion} not supported");
+                throw new ArgumentException($"Schema version {targetSchemaVersion} not supported");
             }
 
             var converter = versionInfo.FromDomainEvent;
@@ -151,9 +151,9 @@ public class EventSerializationRegistry
 
         public IDomainEvent ConvertToDomainEvent(IVersionedEventContract contract)
         {
-            if (!_versions.TryGetValue(contract.Version, out var versionInfo))
+            if (!_versions.TryGetValue(contract.SchemaVersion, out var versionInfo))
             {
-                throw new ArgumentException($"Version {contract.Version} not supported");
+                throw new ArgumentException($"Schema version {contract.SchemaVersion} not supported");
             }
 
             var converter = versionInfo.ToDomainEvent;

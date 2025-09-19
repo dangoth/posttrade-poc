@@ -1,9 +1,9 @@
 namespace PostTradeSystem.Core.Serialization.Contracts;
 
-public class TradeCreatedEventV1 : VersionedEventContractBase
+public class TradeCreatedEventV1 : IVersionedEventContract
 {
-    public override int Version => 1;
-    public override string EventType => "TradeCreated";
+    public int SchemaVersion { get; set; } = 1;
+    public string EventType { get; set; } = "TradeCreated";
 
     public string EventId { get; set; } = string.Empty;
     public string AggregateId { get; set; } = string.Empty;
@@ -26,10 +26,10 @@ public class TradeCreatedEventV1 : VersionedEventContractBase
     public Dictionary<string, object> AdditionalData { get; set; } = new();
 }
 
-public class TradeCreatedEventV2 : VersionedEventContractBase
+public class TradeCreatedEventV2 : IVersionedEventContract
 {
-    public override int Version => 2;
-    public override string EventType => "TradeCreated";
+    public int SchemaVersion { get; set; } = 2;
+    public string EventType { get; set; } = "TradeCreated";
 
     public string EventId { get; set; } = string.Empty;
     public string AggregateId { get; set; } = string.Empty;
@@ -86,9 +86,9 @@ public class TradeCreatedEventV1ToV2Converter : IEventVersionConverter<TradeCrea
         };
     }
 
-    public bool CanConvert(int fromVersion, int toVersion)
+    public bool CanConvert(int fromSchemaVersion, int toSchemaVersion)
     {
-        return fromVersion == 1 && toVersion == 2;
+        return fromSchemaVersion == 1 && toSchemaVersion == 2;
     }
 
     private static string DetermineRegulatoryClassification(string tradeType)
@@ -129,8 +129,8 @@ public class TradeCreatedEventV2ToV1Converter : IEventVersionConverter<TradeCrea
         };
     }
 
-    public bool CanConvert(int fromVersion, int toVersion)
+    public bool CanConvert(int fromSchemaVersion, int toSchemaVersion)
     {
-        return fromVersion == 2 && toVersion == 1;
+        return fromSchemaVersion == 2 && toSchemaVersion == 1;
     }
 }

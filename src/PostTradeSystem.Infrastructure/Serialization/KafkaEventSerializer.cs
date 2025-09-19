@@ -9,12 +9,12 @@ namespace PostTradeSystem.Infrastructure.Serialization;
 public class KafkaEventSerializer
 {
     private readonly IEventSerializer _eventSerializer;
-    private readonly ISchemaRegistry _schemaRegistry;
+    private readonly SerializationManagementService _serializationService;
 
-    public KafkaEventSerializer(IEventSerializer eventSerializer, ISchemaRegistry schemaRegistry)
+    public KafkaEventSerializer(IEventSerializer eventSerializer, SerializationManagementService serializationService)
     {
         _eventSerializer = eventSerializer;
-        _schemaRegistry = schemaRegistry;
+        _serializationService = serializationService;
     }
 
     public async Task<KafkaMessage> SerializeForKafkaAsync(IDomainEvent domainEvent)
@@ -23,7 +23,7 @@ public class KafkaEventSerializer
         
         var headers = KafkaHeaderUtility.CreateEventHeaders(
             serializedEvent.EventType,
-            serializedEvent.Version,
+            serializedEvent.SchemaVersion,
             serializedEvent.SchemaId,
             serializedEvent.SerializedAt,
             domainEvent.CorrelationId,

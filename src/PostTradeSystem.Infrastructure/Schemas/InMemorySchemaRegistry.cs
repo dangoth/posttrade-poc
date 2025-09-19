@@ -22,7 +22,7 @@ public class InMemorySchemaRegistry : ISchemaRegistry
         throw new ArgumentException($"Schema not found for subject '{subject}' version {version}");
     }
 
-    public Task<int> RegisterSchemaAsync(string subject, string schema)
+    public Task<int> RegisterSchemaAsync(string subject, string schema, int version)
     {
         var versions = _schemas.GetOrAdd(subject, _ => new List<SchemaVersion>());
         
@@ -35,7 +35,7 @@ public class InMemorySchemaRegistry : ISchemaRegistry
         var newVersion = new SchemaVersion
         {
             Id = Interlocked.Increment(ref _nextId),
-            Version = versions.Count + 1,
+            Version = version,
             Schema = schema,
             Subject = subject,
             Timestamp = DateTime.UtcNow
@@ -43,6 +43,12 @@ public class InMemorySchemaRegistry : ISchemaRegistry
 
         versions.Add(newVersion);
         return Task.FromResult(newVersion.Id);
+    }
+
+    public Task<int> RegisterSchemaAsync(string subject, string schema)
+    {
+        // Default to version 1 for backward compatibility
+        return RegisterSchemaAsync(subject, schema, 1);
     }
 
     public Task<bool> IsCompatibleAsync(string subject, string schema)
@@ -77,6 +83,7 @@ public class InMemorySchemaRegistry : ISchemaRegistry
     {
         return true;
     }
+
 
     private class SchemaVersion
     {

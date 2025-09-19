@@ -12,22 +12,17 @@ namespace PostTradeSystem.Core.Tests.Serialization;
 
 public class EventSerializationTests
 {
-    private readonly EventSerializationRegistry _registry;
-    private readonly ISchemaRegistry _schemaRegistry;
-    private readonly JsonSchemaValidator _validator;
-    private readonly JsonEventSerializer _serializer;
+    private readonly SerializationManagementService _serializationService;
 
     public EventSerializationTests()
     {
-        _registry = new EventSerializationRegistry();
-        _schemaRegistry = new InMemorySchemaRegistry();
-        _validator = new JsonSchemaValidator();
-        _serializer = new JsonEventSerializer(_registry, _schemaRegistry, _validator);
+        var registry = new EventSerializationRegistry();
+        var schemaRegistry = new InMemorySchemaRegistry();
+        var validator = new JsonSchemaValidator();
+        _serializationService = new SerializationManagementService(registry, schemaRegistry, validator);
         
-        EventSerializationConfiguration.Configure(_registry);
-        
-        var schemaRegistrationService = new SchemaRegistrationService(_schemaRegistry, _validator);
-        Task.Run(async () => await schemaRegistrationService.RegisterEventContractSchemasAsync()).GetAwaiter().GetResult();
+        // Initialize the serialization service
+        _serializationService.InitializeAsync().GetAwaiter().GetResult();
     }
 
     [Fact]
@@ -35,12 +30,12 @@ public class EventSerializationTests
     {
         var originalEvent = CreateSampleTradeCreatedEvent();
 
-        var serialized = await _serializer.Serialize(originalEvent);
-        var deserialized = _serializer.Deserialize(serialized);
+        var serialized = await _serializationService.SerializeAsync(originalEvent);
+        var deserialized = _serializationService.Deserialize(serialized);
 
         serialized.Should().NotBeNull();
         serialized.EventType.Should().Be("TradeCreated");
-        serialized.Version.Should().Be(2);
+        serialized.SchemaVersion.Should().Be(2);
         
         var deserializedEvent = deserialized.Should().BeOfType<TradeCreatedEvent>().Subject;
         AssertTradeCreatedEventEquals(originalEvent, deserializedEvent);
@@ -51,7 +46,7 @@ public class EventSerializationTests
     {
         var originalEvent = CreateSampleTradeCreatedEvent();
 
-        var serialized = await _serializer.Serialize(originalEvent);
+        var serialized = await _serializationService.SerializeAsync(originalEvent);
         
         var jsonOptions = new JsonSerializerOptions
         {
@@ -103,7 +98,7 @@ public class EventSerializationTests
         var serializedEvent = new SerializedEvent(
             "TradeCreated", 1, v1Json, "test-schema", DateTime.UtcNow, new Dictionary<string, string>());
 
-        var deserialized = _serializer.Deserialize(serializedEvent);
+        var deserialized = _serializationService.Deserialize(serializedEvent);
 
         var deserializedEvent = deserialized.Should().BeOfType<TradeCreatedEvent>().Subject;
         deserializedEvent.TraderId.Should().Be(v1Contract.TraderId);
@@ -129,8 +124,8 @@ public class EventSerializationTests
             "TRADE-001", "PENDING", "EXECUTED", "Trade executed successfully",
             2, "CORR-001", "TradingSystem");
 
-        var serialized = await _serializer.Serialize(originalEvent);
-        var deserialized = _serializer.Deserialize(serialized);
+        var serialized = await _serializationService.SerializeAsync(originalEvent);
+        var deserialized = _serializationService.Deserialize(serialized);
 
         var deserializedEvent = deserialized.Should().BeOfType<TradeStatusChangedEvent>().Subject;
         deserializedEvent.AggregateId.Should().Be(originalEvent.AggregateId);
@@ -155,7 +150,7 @@ public class EventSerializationTests
 
         var v2Contract = converter.Convert(v1Contract);
 
-        v2Contract.Version.Should().Be(2);
+        v2Contract.SchemaVersion.Should().Be(2);
         v2Contract.RiskProfile.Should().Be("STANDARD");
         v2Contract.NotionalValue.Should().Be(100000m); // 500 * 200
         v2Contract.RegulatoryClassification.Should().Be("MiFID_II_EQUITY");
@@ -185,7 +180,7 @@ public class EventSerializationTests
 
         var v1Contract = converter.Convert(v2Contract);
 
-        v1Contract.Version.Should().Be(1);
+        v1Contract.SchemaVersion.Should().Be(1);
         
         v1Contract.TraderId.Should().Be(v2Contract.TraderId);
         v1Contract.InstrumentId.Should().Be(v2Contract.InstrumentId);
@@ -201,15 +196,15 @@ public class EventSerializationTests
     [Fact]
     public void SerializationRegistry_ShouldSupportMultipleVersions()
     {
-        var tradeCreatedVersions = _registry.GetSupportedVersions("TradeCreated").ToList();
+        var tradeCreatedVersions = _serializationService.GetSupportedSchemaVersions("TradeCreated").ToList();
         tradeCreatedVersions.Should().Contain(1);
         tradeCreatedVersions.Should().Contain(2);
-        _registry.GetLatestVersion("TradeCreated").Should().Be(2);
+        _serializationService.GetLatestSchemaVersion("TradeCreated").Should().Be(2);
 
-        var statusChangedVersions = _registry.GetSupportedVersions("TradeStatusChanged").ToList();
+        var statusChangedVersions = _serializationService.GetSupportedSchemaVersions("TradeStatusChanged").ToList();
         statusChangedVersions.Should().Contain(1);
         statusChangedVersions.Should().Contain(2);
-        _registry.GetLatestVersion("TradeStatusChanged").Should().Be(2);
+        _serializationService.GetLatestSchemaVersion("TradeStatusChanged").Should().Be(2);
     }
 
     [Fact]
@@ -220,8 +215,8 @@ public class EventSerializationTests
             "BUY", DateTime.UtcNow, "USD", "COUNTER-001", "EQUITY",
             1, "CORR-001", "TestSystem", new Dictionary<string, object>());
 
-        var serialized = await _serializer.Serialize(originalEvent);
-        var deserialized = _serializer.Deserialize(serialized);
+        var serialized = await _serializationService.SerializeAsync(originalEvent);
+        var deserialized = _serializationService.Deserialize(serialized);
 
         var deserializedEvent = deserialized.Should().BeOfType<TradeCreatedEvent>().Subject;
         deserializedEvent.Quantity.Should().Be(originalEvent.Quantity);
@@ -237,8 +232,8 @@ public class EventSerializationTests
             "BUY", specificDateTime, "USD", "COUNTER-001", "EQUITY",
             1, "CORR-001", "TestSystem", new Dictionary<string, object>());
 
-        var serialized = await _serializer.Serialize(originalEvent);
-        var deserialized = _serializer.Deserialize(serialized);
+        var serialized = await _serializationService.SerializeAsync(originalEvent);
+        var deserialized = _serializationService.Deserialize(serialized);
 
         var deserializedEvent = deserialized.Should().BeOfType<TradeCreatedEvent>().Subject;
         deserializedEvent.TradeDateTime.Should().Be(specificDateTime);
@@ -253,12 +248,12 @@ public class EventSerializationTests
         events.Add(v1Event);
 
         var originalEvent = CreateSampleTradeCreatedEvent();
-        var v2Event = await _serializer.Serialize(originalEvent);
+        var v2Event = await _serializationService.SerializeAsync(originalEvent);
         events.Add(v2Event);
 
         foreach (var serializedEvent in events)
         {
-            var deserialized = _serializer.Deserialize(serializedEvent);
+            var deserialized = _serializationService.Deserialize(serializedEvent);
             deserialized.Should().NotBeNull();
             deserialized.Should().BeOfType<TradeCreatedEvent>();
         }

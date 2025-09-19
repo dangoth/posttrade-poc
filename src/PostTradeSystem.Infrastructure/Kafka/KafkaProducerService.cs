@@ -1,5 +1,6 @@
 using Confluent.Kafka;
 using PostTradeSystem.Core.Messages;
+using PostTradeSystem.Core.Serialization;
 using System.Text.Json;
 using Microsoft.Extensions.Configuration;
 
@@ -8,14 +9,18 @@ namespace PostTradeSystem.Infrastructure.Kafka;
 public class KafkaProducerService : IDisposable
 {
     private readonly IProducer<string, string> _producer;
-    private readonly KafkaSchemaRegistry _schemaRegistry;
+    private readonly SerializationManagementService _serializationService;
     private readonly JsonSerializerOptions _jsonOptions;
 
-    public KafkaProducerService(IConfiguration configuration, KafkaSchemaRegistry schemaRegistry)
+    public KafkaProducerService(IConfiguration configuration, SerializationManagementService serializationService)
     {
+        var kafkaBootstrapServers = configuration.GetSection("Kafka:BootstrapServers").Value ?? 
+                                   configuration.GetConnectionString("Kafka") ?? 
+                                   "localhost:9092";
+        
         var config = new ProducerConfig
         {
-            BootstrapServers = configuration.GetConnectionString("Kafka") ?? "localhost:9092",
+            BootstrapServers = kafkaBootstrapServers,
             EnableIdempotence = true,
             Acks = Acks.All,
             MessageTimeoutMs = 30000,
@@ -25,7 +30,7 @@ public class KafkaProducerService : IDisposable
         };
 
         _producer = new ProducerBuilder<string, string>(config).Build();
-        _schemaRegistry = schemaRegistry;
+        _serializationService = serializationService;
         _jsonOptions = new JsonSerializerOptions
         {
             PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
@@ -52,11 +57,6 @@ public class KafkaProducerService : IDisposable
 
         var jsonMessage = JsonSerializer.Serialize(envelope, _jsonOptions);
         
-        var isValid = await _schemaRegistry.ValidateMessageAsync(message.MessageType, jsonMessage);
-        if (!isValid)
-        {
-            throw new InvalidOperationException($"Message validation failed for type {message.MessageType}");
-        }
 
         var kafkaMessage = new Message<string, string>
         {

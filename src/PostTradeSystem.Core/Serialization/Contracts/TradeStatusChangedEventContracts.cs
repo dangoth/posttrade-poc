@@ -2,10 +2,10 @@ using PostTradeSystem.Core.Events;
 
 namespace PostTradeSystem.Core.Serialization.Contracts;
 
-public class TradeStatusChangedEventV1 : VersionedEventContractBase
+public class TradeStatusChangedEventV1 : IVersionedEventContract
 {
-    public override int Version => 1;
-    public override string EventType => "TradeStatusChanged";
+    public int SchemaVersion { get; set; } = 1;
+    public string EventType { get; set; } = "TradeStatusChanged";
 
     public string EventId { get; set; } = string.Empty;
     public string AggregateId { get; set; } = string.Empty;
@@ -20,10 +20,10 @@ public class TradeStatusChangedEventV1 : VersionedEventContractBase
     public string Reason { get; set; } = string.Empty;
 }
 
-public class TradeStatusChangedEventV2 : VersionedEventContractBase
+public class TradeStatusChangedEventV2 : IVersionedEventContract
 {
-    public override int Version => 2;
-    public override string EventType => "TradeStatusChanged";
+    public int SchemaVersion { get; set; } = 2;
+    public string EventType { get; set; } = "TradeStatusChanged";
 
     public string EventId { get; set; } = string.Empty;
     public string AggregateId { get; set; } = string.Empty;
@@ -65,9 +65,9 @@ public class TradeStatusChangedEventV1ToV2Converter : IEventVersionConverter<Tra
         };
     }
 
-    public bool CanConvert(int fromVersion, int toVersion)
+    public bool CanConvert(int fromSchemaVersion, int toSchemaVersion)
     {
-        return fromVersion == 1 && toVersion == 2;
+        return fromSchemaVersion == 1 && toSchemaVersion == 2;
     }
 }
 
@@ -90,8 +90,8 @@ public class TradeStatusChangedEventV2ToV1Converter : IEventVersionConverter<Tra
         };
     }
 
-    public bool CanConvert(int fromVersion, int toVersion)
+    public bool CanConvert(int fromSchemaVersion, int toSchemaVersion)
     {
-        return fromVersion == 2 && toVersion == 1;
+        return fromSchemaVersion == 2 && toSchemaVersion == 1;
     }
 }
