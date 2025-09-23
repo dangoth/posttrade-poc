@@ -12,12 +12,12 @@ namespace PostTradeSystem.Infrastructure.Repositories;
 public class EventStoreRepository : IEventStoreRepository
 {
     private readonly PostTradeDbContext _context;
-    private readonly IEventSerializer _eventSerializer;
+    private readonly SerializationManagementService _serializationService;
 
-    public EventStoreRepository(PostTradeDbContext context, IEventSerializer eventSerializer)
+    public EventStoreRepository(PostTradeDbContext context, SerializationManagementService serializationService)
     {
         _context = context;
-        _eventSerializer = eventSerializer;
+        _serializationService = serializationService;
     }
 
     public async Task<IEnumerable<IDomainEvent>> GetEventsAsync(string aggregateId, long fromVersion = 0, CancellationToken cancellationToken = default)
@@ -38,7 +38,7 @@ public class EventStoreRepository : IEventStoreRepository
                 "default",
                 entity.OccurredAt,
                 new Dictionary<string, string>());
-            var domainEvent = _eventSerializer.Deserialize(serializedEvent);
+            var domainEvent = _serializationService.Deserialize(serializedEvent);
             events.Add(domainEvent);
         }
 
@@ -64,7 +64,7 @@ public class EventStoreRepository : IEventStoreRepository
                 "default",
                 entity.OccurredAt,
                 new Dictionary<string, string>());
-            var domainEvent = _eventSerializer.Deserialize(serializedEvent);
+            var domainEvent = _serializationService.Deserialize(serializedEvent);
             events.Add(domainEvent);
         }
 
@@ -73,10 +73,6 @@ public class EventStoreRepository : IEventStoreRepository
 
     public async Task SaveEventsAsync(string aggregateId, string partitionKey, IEnumerable<IDomainEvent> events, long expectedVersion, CancellationToken cancellationToken = default)
     {
-        using var transaction = await _context.Database.BeginTransactionAsync(cancellationToken);
-        
-        try
-        {
             var currentVersion = await GetCurrentVersionAsync(aggregateId, cancellationToken);
             
             if (currentVersion != expectedVersion)
@@ -96,9 +92,13 @@ public class EventStoreRepository : IEventStoreRepository
                     continue;
                 }
 
-                var serializedEvent = await _eventSerializer.Serialize(domainEvent);
+                var serializedEvent = await _serializationService.SerializeAsync(domainEvent);
                 var eventData = serializedEvent.Data;
                 var metadata = CreateMetadata(domainEvent, serializedEvent);
+
+                // Use the same event type name conversion as the serialization service
+                var eventTypeName = domainEvent.GetType().Name;
+                var eventType = eventTypeName.EndsWith("Event") ? eventTypeName[..^5] : eventTypeName;
 
                 var eventEntity = new EventStoreEntity
                 {
@@ -107,10 +107,11 @@ public class EventStoreRepository : IEventStoreRepository
                     AggregateType = domainEvent.AggregateType,
                     PartitionKey = partitionKey,
                     AggregateVersion = domainEvent.AggregateVersion,
-                    EventType = domainEvent.GetType().Name,
+                    EventType = eventType,  // Store "TradeCreated" instead of "TradeCreatedEvent"
                     EventData = eventData,
                     Metadata = metadata,
                     OccurredAt = domainEvent.OccurredAt,
+                    CreatedAt = DateTime.UtcNow,
                     CorrelationId = domainEvent.CorrelationId,
                     CausedBy = domainEvent.CausedBy,
                     IsProcessed = false
@@ -125,13 +126,6 @@ public class EventStoreRepository : IEventStoreRepository
                 await _context.SaveChangesAsync(cancellationToken);
             }
 
-            await transaction.CommitAsync(cancellationToken);
-        }
-        catch
-        {
-            await transaction.RollbackAsync(cancellationToken);
-            throw;
-        }
     }
 
     public async Task<bool> CheckIdempotencyAsync(string idempotencyKey, string requestHash, CancellationToken cancellationToken = default)
@@ -150,6 +144,7 @@ public class EventStoreRepository : IEventStoreRepository
             AggregateId = aggregateId,
             RequestHash = requestHash,
             ResponseData = responseData,
+            CreatedAt = DateTime.UtcNow,
             ExpiresAt = DateTime.UtcNow.Add(expiration)
         };
 
@@ -204,7 +199,7 @@ public class EventStoreRepository : IEventStoreRepository
                 "default",
                 entity.OccurredAt,
                 new Dictionary<string, string>());
-            var domainEvent = _eventSerializer.Deserialize(serializedEvent);
+            var domainEvent = _serializationService.Deserialize(serializedEvent);
             events.Add(domainEvent);
         }
 
@@ -257,6 +252,19 @@ public class EventStoreRepository : IEventStoreRepository
         
         // Default to version 1 if not found or parsing fails
         return 1;
+    }
+
+    public async Task CleanupExpiredIdempotencyKeysAsync(CancellationToken cancellationToken = default)
+    {
+        var expiredKeys = await _context.IdempotencyKeys
+            .Where(i => i.ExpiresAt <= DateTime.UtcNow)
+            .ToListAsync(cancellationToken);
+
+        if (expiredKeys.Any())
+        {
+            _context.IdempotencyKeys.RemoveRange(expiredKeys);
+            await _context.SaveChangesAsync(cancellationToken);
+        }
     }
 
     public static string ComputeHash(string input)

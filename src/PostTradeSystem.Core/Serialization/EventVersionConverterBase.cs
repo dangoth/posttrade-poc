@@ -21,17 +21,6 @@ public abstract class EventVersionConverterBase<TFrom, TTo> : IEventVersionConve
         return new Dictionary<string, object>(source);
     }
 
-    // Helper method to determine regulatory classification based on trade type
-    protected static string DetermineRegulatoryClassification(string tradeType)
-    {
-        return tradeType.ToUpper() switch
-        {
-            "EQUITY" => "MiFID_II_EQUITY",
-            "OPTION" => "MiFID_II_DERIVATIVE", 
-            "FX" => "EMIR_FX",
-            _ => "UNCLASSIFIED"
-        };
-    }
 
     // Helper method to calculate notional value
     protected static decimal CalculateNotionalValue(decimal quantity, decimal price)

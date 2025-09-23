@@ -11,5 +11,6 @@ public interface IEventStoreRepository
     Task SaveIdempotencyAsync(string idempotencyKey, string aggregateId, string requestHash, string responseData, TimeSpan expiration, CancellationToken cancellationToken = default);
     Task<string?> GetIdempotentResponseAsync(string idempotencyKey, string requestHash, CancellationToken cancellationToken = default);
     Task MarkEventsAsProcessedAsync(IEnumerable<string> eventIds, CancellationToken cancellationToken = default);
+    Task CleanupExpiredIdempotencyKeysAsync(CancellationToken cancellationToken = default);
     Task<IEnumerable<IDomainEvent>> GetUnprocessedEventsAsync(int batchSize = 100, CancellationToken cancellationToken = default);
 }

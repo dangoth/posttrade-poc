@@ -2,8 +2,8 @@ namespace PostTradeSystem.Core.Serialization.Contracts;
 
 public class TradeCreatedEventV1 : IVersionedEventContract
 {
-    public int SchemaVersion { get; set; } = 1;
-    public string EventType { get; set; } = "TradeCreated";
+    public int SchemaVersion => 1;
+    public string EventType => "TradeCreated";
 
     public string EventId { get; set; } = string.Empty;
     public string AggregateId { get; set; } = string.Empty;
@@ -28,8 +28,8 @@ public class TradeCreatedEventV1 : IVersionedEventContract
 
 public class TradeCreatedEventV2 : IVersionedEventContract
 {
-    public int SchemaVersion { get; set; } = 2;
-    public string EventType { get; set; } = "TradeCreated";
+    public int SchemaVersion => 2;
+    public string EventType => "TradeCreated";
 
     public string EventId { get; set; } = string.Empty;
     public string AggregateId { get; set; } = string.Empty;
@@ -56,7 +56,7 @@ public class TradeCreatedEventV2 : IVersionedEventContract
     public string RegulatoryClassification { get; set; } = string.Empty;
 }
 
-public class TradeCreatedEventV1ToV2Converter : IEventVersionConverter<TradeCreatedEventV1, TradeCreatedEventV2>
+public class TradeCreatedEventV1ToV2Converter : IEventConverter<TradeCreatedEventV1, TradeCreatedEventV2>
 {
     public TradeCreatedEventV2 Convert(TradeCreatedEventV1 source)
     {
@@ -86,9 +86,9 @@ public class TradeCreatedEventV1ToV2Converter : IEventVersionConverter<TradeCrea
         };
     }
 
-    public bool CanConvert(int fromSchemaVersion, int toSchemaVersion)
+    public bool CanConvert(int fromVersion, int toVersion)
     {
-        return fromSchemaVersion == 1 && toSchemaVersion == 2;
+        return fromVersion == 1 && toVersion == 2;
     }
 
     private static string DetermineRegulatoryClassification(string tradeType)
@@ -103,7 +103,7 @@ public class TradeCreatedEventV1ToV2Converter : IEventVersionConverter<TradeCrea
     }
 }
 
-public class TradeCreatedEventV2ToV1Converter : IEventVersionConverter<TradeCreatedEventV2, TradeCreatedEventV1>
+public class TradeCreatedEventV2ToV1Converter : IEventConverter<TradeCreatedEventV2, TradeCreatedEventV1>
 {
     public TradeCreatedEventV1 Convert(TradeCreatedEventV2 source)
     {
@@ -129,8 +129,8 @@ public class TradeCreatedEventV2ToV1Converter : IEventVersionConverter<TradeCrea
         };
     }
 
-    public bool CanConvert(int fromSchemaVersion, int toSchemaVersion)
+    public bool CanConvert(int fromVersion, int toVersion)
     {
-        return fromSchemaVersion == 2 && toSchemaVersion == 1;
+        return fromVersion == 2 && toVersion == 1;
     }
 }

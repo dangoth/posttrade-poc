@@ -1,4 +1,5 @@
 using Moq;
+using Microsoft.Extensions.DependencyInjection;
 using PostTradeSystem.Core.Aggregates;
 using PostTradeSystem.Core.Events;
 using PostTradeSystem.Infrastructure.Repositories;
@@ -10,27 +11,17 @@ using Xunit;
 
 namespace PostTradeSystem.Infrastructure.Tests.Repositories;
 
-public class AggregateRepositoryTests : SqlServerTestBase
+public class AggregateRepositoryTests : IntegrationTestBase
 {
     private readonly Mock<IEventStoreRepository> _mockEventStore;
-    private readonly Mock<Func<string, string, IEnumerable<IDomainEvent>, TestAggregate>> _mockFactory;
-    private AggregateRepository<TestAggregate> _repository = null!;
+    private readonly Mock<Func<string, string, IEnumerable<IDomainEvent>, TradeAggregate>> _mockFactory;
+    private AggregateRepository<TradeAggregate> _repository = null!;
 
     public AggregateRepositoryTests(SqlServerFixture fixture) : base(fixture)
     {
         _mockEventStore = new Mock<IEventStoreRepository>();
-        _mockFactory = new Mock<Func<string, string, IEnumerable<IDomainEvent>, TestAggregate>>();
-    }
-
-    public override async Task InitializeAsync()
-    {
-        await base.InitializeAsync();
-        
-        // Reset mocks for each test
-        _mockEventStore.Reset();
-        _mockFactory.Reset();
-        
-        _repository = new AggregateRepository<TestAggregate>(_mockEventStore.Object, _mockFactory.Object);
+        _mockFactory = new Mock<Func<string, string, IEnumerable<IDomainEvent>, TradeAggregate>>();
+        _repository = new AggregateRepository<TradeAggregate>(_mockEventStore.Object, _mockFactory.Object);
     }
 
     [Fact]
@@ -56,11 +47,11 @@ public class AggregateRepositoryTests : SqlServerTestBase
         
         var events = new List<IDomainEvent>
         {
-            new TestDomainEvent(aggregateId, "Trade", 1, correlationId, causedBy),
-            new TestDomainEvent(aggregateId, "Trade", 2, correlationId, causedBy)
+            DomainEventHelpers.CreateTradeCreatedEvent(aggregateId, 1, correlationId, causedBy),
+            DomainEventHelpers.CreateTradeStatusChangedEvent(aggregateId, 2, correlationId, causedBy)
         };
 
-        var expectedAggregate = new TestAggregate(aggregateId, partitionKey);
+        var expectedAggregate = TradeAggregate.FromHistory(aggregateId, partitionKey, events);
 
         _mockEventStore.Setup(es => es.GetEventsAsync(aggregateId, 0, It.IsAny<CancellationToken>()))
             .ReturnsAsync(events);
@@ -70,14 +61,21 @@ public class AggregateRepositoryTests : SqlServerTestBase
 
         var result = await _repository.GetByIdAsync(aggregateId);
 
-        result.Should().Be(expectedAggregate);
+        result.Should().NotBeNull();
+        result!.Id.Should().Be(aggregateId);
+        result.PartitionKey.Should().Be(partitionKey);
         _mockFactory.Verify(f => f(aggregateId, It.IsAny<string>(), events), Times.Once);
     }
 
     [Fact]
     public async Task SaveAsync_DoesNothingWhenNoUncommittedEvents()
     {
-        var aggregate = new TestAggregate(Guid.NewGuid().ToString(), "TRADER001:AAPL");
+        var aggregateId = Guid.NewGuid().ToString();
+        var partitionKey = "TRADER001:AAPL";
+        
+        // Create an aggregate with no uncommitted events (just from history)
+        var initialEvent = DomainEventHelpers.CreateTradeCreatedEvent(aggregateId, 1, Guid.NewGuid().ToString(), "TestSystem");
+        var aggregate = TradeAggregate.FromHistory(aggregateId, partitionKey, new[] { initialEvent });
 
         await _repository.SaveAsync(aggregate);
 
@@ -93,17 +91,29 @@ public class AggregateRepositoryTests : SqlServerTestBase
     public async Task SaveAsync_SavesUncommittedEvents()
     {
         var aggregateId = Guid.NewGuid().ToString();
-        var partitionKey = "TRADER001:AAPL";
-        var aggregate = new TestAggregate(aggregateId, partitionKey);
         
-        var domainEvent = new TestDomainEvent(aggregateId, "Trade", 1, Guid.NewGuid().ToString(), "TestSystem");
-        aggregate.AddUncommittedEvent(domainEvent);
+        // Create a new trade aggregate which will have uncommitted events
+        var aggregate = TradeAggregate.CreateTrade(
+            aggregateId,
+            "TRADER001",
+            "AAPL", 
+            100m,
+            150.50m,
+            PostTradeSystem.Core.Models.TradeDirection.Buy,
+            DateTime.UtcNow,
+            "USD",
+            "COUNTERPARTY001",
+            "EQUITY",
+            new Dictionary<string, object>(),
+            Guid.NewGuid().ToString(),
+            "TestSystem"
+        );
 
         await _repository.SaveAsync(aggregate);
 
         _mockEventStore.Verify(es => es.SaveEventsAsync(
             aggregateId,
-            partitionKey,
+            aggregate.PartitionKey,
             It.IsAny<IEnumerable<IDomainEvent>>(),
             0,
             It.IsAny<CancellationToken>()), Times.Once);
@@ -115,13 +125,24 @@ public class AggregateRepositoryTests : SqlServerTestBase
     public async Task SaveAsync_WithIdempotency_ChecksIdempotencyFirst()
     {
         var aggregateId = Guid.NewGuid().ToString();
-        var partitionKey = "TRADER001:AAPL";
         var idempotencyKey = "KEY001";
         var requestHash = "HASH001";
-        var aggregate = new TestAggregate(aggregateId, partitionKey);
-        
-        var domainEvent = new TestDomainEvent(aggregateId, "Trade", 1, Guid.NewGuid().ToString(), "TestSystem");
-        aggregate.AddUncommittedEvent(domainEvent);
+        // Create a new trade aggregate which will have uncommitted events
+        var aggregate = TradeAggregate.CreateTrade(
+            aggregateId,
+            "TRADER001",
+            "AAPL", 
+            100m,
+            150.50m,
+            PostTradeSystem.Core.Models.TradeDirection.Buy,
+            DateTime.UtcNow,
+            "USD",
+            "COUNTERPARTY001",
+            "EQUITY",
+            new Dictionary<string, object>(),
+            Guid.NewGuid().ToString(),
+            "TestSystem"
+        );
 
         _mockEventStore.Setup(es => es.CheckIdempotencyAsync(idempotencyKey, requestHash, It.IsAny<CancellationToken>()))
             .ReturnsAsync(true);
@@ -148,13 +169,24 @@ public class AggregateRepositoryTests : SqlServerTestBase
     public async Task SaveAsync_WithIdempotency_SavesWhenNotIdempotent()
     {
         var aggregateId = Guid.NewGuid().ToString();
-        var partitionKey = "TRADER001:AAPL";
         var idempotencyKey = "KEY001";
         var requestHash = "HASH001";
-        var aggregate = new TestAggregate(aggregateId, partitionKey);
-        
-        var domainEvent = new TestDomainEvent(aggregateId, "Trade", 1, Guid.NewGuid().ToString(), "TestSystem");
-        aggregate.AddUncommittedEvent(domainEvent);
+        // Create a new trade aggregate which will have uncommitted events
+        var aggregate = TradeAggregate.CreateTrade(
+            aggregateId,
+            "TRADER001",
+            "AAPL", 
+            100m,
+            150.50m,
+            PostTradeSystem.Core.Models.TradeDirection.Buy,
+            DateTime.UtcNow,
+            "USD",
+            "COUNTERPARTY001",
+            "EQUITY",
+            new Dictionary<string, object>(),
+            Guid.NewGuid().ToString(),
+            "TestSystem"
+        );
 
         _mockEventStore.Setup(es => es.CheckIdempotencyAsync(idempotencyKey, requestHash, It.IsAny<CancellationToken>()))
             .ReturnsAsync(false);
@@ -163,7 +195,7 @@ public class AggregateRepositoryTests : SqlServerTestBase
 
         _mockEventStore.Verify(es => es.SaveEventsAsync(
             aggregateId,
-            partitionKey,
+            aggregate.PartitionKey,
             It.IsAny<IEnumerable<IDomainEvent>>(),
             0,
             It.IsAny<CancellationToken>()), Times.Once);
@@ -178,36 +210,3 @@ public class AggregateRepositoryTests : SqlServerTestBase
     }
 }
 
-public class TestAggregate : IAggregateRoot
-{
-    private readonly List<IDomainEvent> _uncommittedEvents = new();
-
-    public TestAggregate(string id, string partitionKey)
-    {
-        Id = id;
-        PartitionKey = partitionKey;
-    }
-
-    public string Id { get; }
-    public string PartitionKey { get; }
-
-    public IReadOnlyList<IDomainEvent> GetUncommittedEvents()
-    {
-        return _uncommittedEvents.AsReadOnly();
-    }
-
-    public void MarkEventsAsCommitted()
-    {
-        _uncommittedEvents.Clear();
-    }
-
-    public void LoadFromHistory(IEnumerable<IDomainEvent> events)
-    {
-        // Test implementation - just load events without applying them
-    }
-
-    public void AddUncommittedEvent(IDomainEvent domainEvent)
-    {
-        _uncommittedEvents.Add(domainEvent);
-    }
-}

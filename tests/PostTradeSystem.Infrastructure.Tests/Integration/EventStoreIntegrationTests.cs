@@ -1,43 +1,19 @@
+using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
 using PostTradeSystem.Core.Events;
-using PostTradeSystem.Core.Serialization;
-using PostTradeSystem.Infrastructure.Data;
-using PostTradeSystem.Infrastructure.Repositories;
+using PostTradeSystem.Infrastructure.Tests.TestBase;
 using PostTradeSystem.Infrastructure.Tests.TestHelpers;
-using FluentAssertions;
-using Moq;
-using Testcontainers.MsSql;
 using Xunit;
 
 namespace PostTradeSystem.Infrastructure.Tests.Integration;
 
 [Collection("SqlServer")]
-public class EventStoreIntegrationTests : IAsyncLifetime
+public class EventStoreIntegrationTests : IntegrationTestBase
 {
-    private readonly SqlServerFixture _fixture;
-    private PostTradeDbContext _context => _fixture.Context;
-    private Mock<IEventSerializer> _mockSerializer = null!;
-    private EventStoreRepository _repository = null!;
-
-    public EventStoreIntegrationTests(SqlServerFixture fixture)
+    public EventStoreIntegrationTests(SqlServerFixture fixture) : base(fixture)
     {
-        _fixture = fixture;
     }
 
-    public async Task InitializeAsync()
-    {
-        // Reset database to clean state before each test
-        await _fixture.ResetDatabaseAsync();
-
-        _mockSerializer = new Mock<IEventSerializer>();
-        _repository = new EventStoreRepository(_context, _mockSerializer.Object);
-    }
-
-    public async Task DisposeAsync()
-    {
-        // Nothing to dispose - fixture handles the context
-        await Task.CompletedTask;
-    }
 
     [Fact]
     public async Task EventStore_FullWorkflow_WithSqlServerDatabase()
@@ -47,36 +23,67 @@ public class EventStoreIntegrationTests : IAsyncLifetime
         var correlationId = Guid.NewGuid().ToString();
         var causedBy = "IntegrationTest";
 
-        var event1 = new TestDomainEvent(aggregateId, "Trade", 1, correlationId, causedBy);
-        var event2 = new TestDomainEvent(aggregateId, "Trade", 2, correlationId, causedBy);
+        var event1 = DomainEventHelpers.CreateTradeCreatedEvent(aggregateId, 1, correlationId, causedBy);
+        var event2 = DomainEventHelpers.CreateTradeStatusChangedEvent(aggregateId, 2, correlationId, causedBy);
         var events = new List<IDomainEvent> { event1, event2 };
 
-        _mockSerializer.Setup(s => s.Serialize(It.Is<IDomainEvent>(e => e.AggregateVersion == 1)))
-            .ReturnsAsync(new SerializedEvent("TestDomainEvent", 1, "{\"AggregateVersion\":1}", "test-schema", DateTime.UtcNow, new Dictionary<string, string>()));
+        // Debug: Check event types and serialization service state
+        System.Diagnostics.Debug.WriteLine($"Event1 Type: {event1.GetType().Name}");
+        System.Diagnostics.Debug.WriteLine($"Event2 Type: {event2.GetType().Name}");
         
-        _mockSerializer.Setup(s => s.Serialize(It.Is<IDomainEvent>(e => e.AggregateVersion == 2)))
-            .ReturnsAsync(new SerializedEvent("TestDomainEvent", 1, "{\"AggregateVersion\":2}", "test-schema", DateTime.UtcNow, new Dictionary<string, string>()));
+        // Debug: Check what the serialization service knows about
+        var supportedEventTypes = SerializationService.GetSupportedEventTypes();
+        System.Diagnostics.Debug.WriteLine($"Supported Event Types: [{string.Join(", ", supportedEventTypes)}]");
+        
+        // Debug: Check event type name conversion
+        var event1TypeName = event1.GetType().Name.EndsWith("Event") ? event1.GetType().Name[..^5] : event1.GetType().Name;
+        var event2TypeName = event2.GetType().Name.EndsWith("Event") ? event2.GetType().Name[..^5] : event2.GetType().Name;
+        System.Diagnostics.Debug.WriteLine($"Event1 Type Name (converted): {event1TypeName}");
+        System.Diagnostics.Debug.WriteLine($"Event2 Type Name (converted): {event2TypeName}");
+        
+        // Debug: Check latest schema versions
+        try
+        {
+            var event1LatestVersion = SerializationService.GetLatestSchemaVersion(event1TypeName);
+            System.Diagnostics.Debug.WriteLine($"Event1 Latest Schema Version: {event1LatestVersion}");
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"Error getting Event1 latest version: {ex.Message}");
+        }
+        
+        try
+        {
+            var event2LatestVersion = SerializationService.GetLatestSchemaVersion(event2TypeName);
+            System.Diagnostics.Debug.WriteLine($"Event2 Latest Schema Version: {event2LatestVersion}");
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"Error getting Event2 latest version: {ex.Message}");
+        }
+        
+        // Debug: Check supported schema versions
+        var event1SupportedVersions = SerializationService.GetSupportedSchemaVersions(event1TypeName);
+        var event2SupportedVersions = SerializationService.GetSupportedSchemaVersions(event2TypeName);
+        System.Diagnostics.Debug.WriteLine($"Event1 Supported Versions: [{string.Join(", ", event1SupportedVersions)}]");
+        System.Diagnostics.Debug.WriteLine($"Event2 Supported Versions: [{string.Join(", ", event2SupportedVersions)}]");
 
-        _mockSerializer.Setup(s => s.Deserialize(It.IsAny<SerializedEvent>()))
-            .Returns((SerializedEvent se) => 
-                se.Data.Contains("\"AggregateVersion\":1") ? event1 : event2);
+        await EventStoreRepository.SaveEventsAsync(aggregateId, partitionKey, events, 0);
 
-        await _repository.SaveEventsAsync(aggregateId, partitionKey, events, 0);
-
-        var retrievedEvents = await _repository.GetEventsAsync(aggregateId);
+        var retrievedEvents = await EventStoreRepository.GetEventsAsync(aggregateId);
 
         retrievedEvents.Should().HaveCount(2);
         retrievedEvents.Should().BeInAscendingOrder(e => e.AggregateVersion);
 
-        var eventsByPartition = await _repository.GetEventsByPartitionKeyAsync(partitionKey);
+        var eventsByPartition = await EventStoreRepository.GetEventsByPartitionKeyAsync(partitionKey);
         eventsByPartition.Should().HaveCount(2);
 
-        var unprocessedEvents = await _repository.GetUnprocessedEventsAsync();
+        var unprocessedEvents = await EventStoreRepository.GetUnprocessedEventsAsync();
         unprocessedEvents.Should().HaveCount(2);
 
-        await _repository.MarkEventsAsProcessedAsync(new[] { event1.EventId });
+        await EventStoreRepository.MarkEventsAsProcessedAsync(new[] { event1.EventId });
 
-        var remainingUnprocessed = await _repository.GetUnprocessedEventsAsync();
+        var remainingUnprocessed = await EventStoreRepository.GetUnprocessedEventsAsync();
         remainingUnprocessed.Should().HaveCount(1);
     }
 
@@ -88,23 +95,23 @@ public class EventStoreIntegrationTests : IAsyncLifetime
         var aggregateId = Guid.NewGuid().ToString();
         var responseData = "{\"success\": true}";
 
-        var isIdempotentBefore = await _repository.CheckIdempotencyAsync(idempotencyKey, requestHash);
+        var isIdempotentBefore = await EventStoreRepository.CheckIdempotencyAsync(idempotencyKey, requestHash);
         isIdempotentBefore.Should().BeFalse();
 
-        await _repository.SaveIdempotencyAsync(
+        await EventStoreRepository.SaveIdempotencyAsync(
             idempotencyKey, 
             aggregateId, 
             requestHash, 
             responseData, 
             TimeSpan.FromHours(1));
 
-        var isIdempotentAfter = await _repository.CheckIdempotencyAsync(idempotencyKey, requestHash);
+        var isIdempotentAfter = await EventStoreRepository.CheckIdempotencyAsync(idempotencyKey, requestHash);
         isIdempotentAfter.Should().BeTrue();
 
-        var retrievedResponse = await _repository.GetIdempotentResponseAsync(idempotencyKey, requestHash);
+        var retrievedResponse = await EventStoreRepository.GetIdempotentResponseAsync(idempotencyKey, requestHash);
         retrievedResponse.Should().Be(responseData);
 
-        var wrongHashResponse = await _repository.GetIdempotentResponseAsync(idempotencyKey, "WRONG_HASH");
+        var wrongHashResponse = await EventStoreRepository.GetIdempotentResponseAsync(idempotencyKey, "WRONG_HASH");
         wrongHashResponse.Should().BeNull();
     }
 
@@ -115,15 +122,12 @@ public class EventStoreIntegrationTests : IAsyncLifetime
         var partitionKey = "TRADER001:AAPL";
         var correlationId = Guid.NewGuid().ToString();
 
-        var event1 = new TestDomainEvent(aggregateId, "Trade", 1, correlationId, "System1");
-        var event2 = new TestDomainEvent(aggregateId, "Trade", 2, correlationId, "System2");
+        var event1 = DomainEventHelpers.CreateTradeCreatedEvent(aggregateId, 1, correlationId, "System1");
+        var event2 = DomainEventHelpers.CreateTradeStatusChangedEvent(aggregateId, 2, correlationId, "System2");
 
-        _mockSerializer.Setup(s => s.Serialize(It.IsAny<IDomainEvent>()))
-            .ReturnsAsync(new SerializedEvent("TestDomainEvent", 1, "{\"test\": \"data\"}", "test-schema", DateTime.UtcNow, new Dictionary<string, string>()));
+        await EventStoreRepository.SaveEventsAsync(aggregateId, partitionKey, new[] { event1 }, 0);
 
-        await _repository.SaveEventsAsync(aggregateId, partitionKey, new[] { event1 }, 0);
-
-        var act = async () => await _repository.SaveEventsAsync(aggregateId, partitionKey, new[] { event2 }, 0);
+        var act = async () => await EventStoreRepository.SaveEventsAsync(aggregateId, partitionKey, new[] { event2 }, 0);
 
         await act.Should().ThrowAsync<InvalidOperationException>()
             .WithMessage("*Concurrency conflict*");
@@ -162,12 +166,12 @@ public class EventStoreIntegrationTests : IAsyncLifetime
             CausedBy = "Test"
         };
 
-        _context.EventStore.Add(entity1);
-        await _context.SaveChangesAsync();
+        Context.EventStore.Add(entity1);
+        await Context.SaveChangesAsync();
 
-        _context.EventStore.Add(entity2);
+        Context.EventStore.Add(entity2);
 
-        var act = async () => await _context.SaveChangesAsync();
+        var act = async () => await Context.SaveChangesAsync();
         await act.Should().ThrowAsync<DbUpdateException>();
     }
 
@@ -179,21 +183,21 @@ public class EventStoreIntegrationTests : IAsyncLifetime
         var correlationId = Guid.NewGuid().ToString();
         var sharedEventId = Guid.NewGuid().ToString();
 
-        var validEvent = new TestDomainEvent(aggregateId, "Trade", 1, correlationId, "TestSystem", sharedEventId);
+        var validEvent = DomainEventHelpers.CreateTradeCreatedEvent(aggregateId, 1, correlationId, "TestSystem");
         
         // Create an event with the same EventId to cause a unique constraint violation
-        var duplicateEvent = new TestDomainEvent(aggregateId, "Trade", 2, correlationId, "TestSystem", sharedEventId);
-
-        _mockSerializer.Setup(s => s.Serialize(It.IsAny<IDomainEvent>()))
-            .ReturnsAsync(new SerializedEvent("TestDomainEvent", 1, "{\"test\": \"data\"}", "test-schema", DateTime.UtcNow, new Dictionary<string, string>()));
+        var duplicateEvent = DomainEventHelpers.CreateTradeStatusChangedEvent(aggregateId, 2, correlationId, "TestSystem");
+        
+        // Force the same EventId to test unique constraint
+        typeof(Core.Events.DomainEventBase).GetProperty("EventId")!.SetValue(duplicateEvent, validEvent.EventId);
 
         var events = new List<IDomainEvent> { validEvent, duplicateEvent };
 
-        var act = async () => await _repository.SaveEventsAsync(aggregateId, partitionKey, events, 0);
+        var act = async () => await EventStoreRepository.SaveEventsAsync(aggregateId, partitionKey, events, 0);
 
         await act.Should().ThrowAsync<Exception>();
 
-        var savedEvents = await _context.EventStore.CountAsync();
+        var savedEvents = await Context.EventStore.CountAsync();
         savedEvents.Should().Be(0);
     }
 
@@ -206,31 +210,23 @@ public class EventStoreIntegrationTests : IAsyncLifetime
         var events = new List<IDomainEvent>();
         for (int i = 1; i <= 100; i++)
         {
-            events.Add(new TestDomainEvent(aggregateId, "Trade", i, Guid.NewGuid().ToString(), "TestSystem"));
+            // Alternate between different event types for more realistic testing
+            if (i % 3 == 1)
+                events.Add(DomainEventHelpers.CreateTradeCreatedEvent(aggregateId, i, Guid.NewGuid().ToString(), "TestSystem"));
+            else if (i % 3 == 2)
+                events.Add(DomainEventHelpers.CreateTradeStatusChangedEvent(aggregateId, i, Guid.NewGuid().ToString(), "TestSystem"));
+            else
+                events.Add(DomainEventHelpers.CreateTradeUpdatedEvent(aggregateId, i, Guid.NewGuid().ToString(), "TestSystem"));
         }
-
-        _mockSerializer.Setup(s => s.Serialize(It.IsAny<IDomainEvent>()))
-            .ReturnsAsync((IDomainEvent e) => new SerializedEvent("TestDomainEvent", 1, $"{{\"AggregateVersion\":{e.AggregateVersion}}}", "test-schema", DateTime.UtcNow, new Dictionary<string, string>()));
-
-        _mockSerializer.Setup(s => s.Deserialize(It.IsAny<SerializedEvent>()))
-            .Returns((SerializedEvent se) => {
-                // Extract version from serialized data and return corresponding event
-                var versionMatch = System.Text.RegularExpressions.Regex.Match(se.Data, @"""AggregateVersion"":(\d+)");
-                if (versionMatch.Success && int.TryParse(versionMatch.Groups[1].Value, out int version))
-                {
-                    return events.FirstOrDefault(e => e.AggregateVersion == version) ?? events.First();
-                }
-                return events.First();
-            });
 
         var startTime = DateTime.UtcNow;
         
         foreach (var eventBatch in events.Chunk(10))
         {
-            await _repository.SaveEventsAsync(aggregateId, partitionKey, eventBatch, eventBatch.First().AggregateVersion - 1);
+            await EventStoreRepository.SaveEventsAsync(aggregateId, partitionKey, eventBatch, eventBatch.First().AggregateVersion - 1);
         }
 
-        var retrievedEvents = await _repository.GetEventsAsync(aggregateId);
+        var retrievedEvents = await EventStoreRepository.GetEventsAsync(aggregateId);
         
         var endTime = DateTime.UtcNow;
         var duration = endTime - startTime;

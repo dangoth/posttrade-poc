@@ -27,6 +27,14 @@ public class EventSerializationRegistry
         _converters[key] = converter;
     }
 
+    public void RegisterConverter<TFrom, TTo>(IEventConverter<TFrom, TTo> converter)
+        where TFrom : IVersionedEventContract
+        where TTo : IVersionedEventContract
+    {
+        var key = $"{typeof(TFrom).Name}->{typeof(TTo).Name}";
+        _converters[key] = converter;
+    }
+
     public void RegisterConverter(object converter)
     {
         var converterType = converter.GetType();
@@ -76,11 +84,15 @@ public class EventSerializationRegistry
         var typeName = domainEvent.GetType().Name;
         var eventType = typeName.EndsWith("Event") ? typeName[..^5] : typeName;
         
+        System.Diagnostics.Debug.WriteLine($"[EventSerializationRegistry] Converting {typeName} -> {eventType}, target version: {targetSchemaVersion}");
+        
         if (!_eventTypes.TryGetValue(eventType, out var registry))
         {
-            throw new ArgumentException($"Event type '{eventType}' not registered");
+            var availableTypes = string.Join(", ", _eventTypes.Keys);
+            throw new ArgumentException($"Event type '{eventType}' not registered. Available types: [{availableTypes}]");
         }
 
+        System.Diagnostics.Debug.WriteLine($"[EventSerializationRegistry] Found registry for {eventType}, calling inner ConvertFromDomainEvent");
         return registry.ConvertFromDomainEvent(domainEvent, targetSchemaVersion);
     }
 
@@ -102,10 +114,16 @@ public class EventSerializationRegistry
     {
         var key = $"{typeof(TFrom).Name}->{typeof(TTo).Name}";
         
-        if (_converters.TryGetValue(key, out var converter) && 
-            converter is IEventVersionConverter<TFrom, TTo> typedConverter)
+        if (_converters.TryGetValue(key, out var converter))
         {
-            return typedConverter.Convert(source);
+            if (converter is IEventVersionConverter<TFrom, TTo> oldConverter)
+            {
+                return oldConverter.Convert(source);
+            }
+            if (converter is IEventConverter<TFrom, TTo> newConverter)
+            {
+                return newConverter.Convert(source);
+            }
         }
 
         throw new InvalidOperationException($"No converter registered for {typeof(TFrom).Name} -> {typeof(TTo).Name}");
@@ -137,16 +155,34 @@ public class EventSerializationRegistry
 
         public IVersionedEventContract ConvertFromDomainEvent(IDomainEvent domainEvent, int targetSchemaVersion)
         {
+            System.Diagnostics.Debug.WriteLine($"[EventTypeRegistry] Converting to schema version {targetSchemaVersion}");
+            System.Diagnostics.Debug.WriteLine($"[EventTypeRegistry] Available versions: [{string.Join(", ", _versions.Keys)}]");
+            
             if (!_versions.TryGetValue(targetSchemaVersion, out var versionInfo))
             {
-                throw new ArgumentException($"Schema version {targetSchemaVersion} not supported");
+                var availableVersions = string.Join(", ", _versions.Keys);
+                throw new ArgumentException($"Schema version {targetSchemaVersion} not supported. Available versions: [{availableVersions}]");
             }
 
+            System.Diagnostics.Debug.WriteLine($"[EventTypeRegistry] Found version info for {targetSchemaVersion}, invoking converter");
             var converter = versionInfo.FromDomainEvent;
             var method = converter.GetType().GetMethod("Invoke");
-            var result = method?.Invoke(converter, new object[] { domainEvent });
             
-            return (IVersionedEventContract)result!;
+            try
+            {
+                var result = method?.Invoke(converter, new object[] { domainEvent });
+                System.Diagnostics.Debug.WriteLine($"[EventTypeRegistry] Conversion successful");
+                return (IVersionedEventContract)result!;
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[EventTypeRegistry] Conversion failed: {ex.Message}");
+                if (ex.InnerException != null)
+                {
+                    System.Diagnostics.Debug.WriteLine($"[EventTypeRegistry] Inner exception: {ex.InnerException.Message}");
+                }
+                throw;
+            }
         }
 
         public IDomainEvent ConvertToDomainEvent(IVersionedEventContract contract)

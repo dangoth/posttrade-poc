@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
 using PostTradeSystem.Infrastructure.Data;
 using PostTradeSystem.Infrastructure.Entities;
 using PostTradeSystem.Infrastructure.Tests.Integration;
@@ -8,7 +9,8 @@ using Xunit;
 
 namespace PostTradeSystem.Infrastructure.Tests.Configuration;
 
-public class EntityConfigurationTests : SqlServerTestBase
+[Collection("SqlServer")]
+public class EntityConfigurationTests : IntegrationTestBase
 {
     public EntityConfigurationTests(SqlServerFixture fixture) : base(fixture)
     {

@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
 using Moq;
 using PostTradeSystem.Core.Events;
 using PostTradeSystem.Core.Serialization;
@@ -12,20 +13,10 @@ using Xunit;
 
 namespace PostTradeSystem.Infrastructure.Tests.Repositories;
 
-public class EventStoreRepositoryTests : SqlServerTestBase
+public class EventStoreRepositoryTests : IntegrationTestBase
 {
-    private readonly Mock<IEventSerializer> _mockSerializer;
-    private EventStoreRepository _repository = null!;
-
     public EventStoreRepositoryTests(SqlServerFixture fixture) : base(fixture)
     {
-        _mockSerializer = new Mock<IEventSerializer>();
-    }
-
-    public override async Task InitializeAsync()
-    {
-        await base.InitializeAsync();
-        _repository = new EventStoreRepository(Context, _mockSerializer.Object);
     }
 
     [Fact]
@@ -36,13 +27,10 @@ public class EventStoreRepositoryTests : SqlServerTestBase
         var correlationId = Guid.NewGuid().ToString();
         var causedBy = "TestSystem";
 
-        var domainEvent = new TestDomainEvent(aggregateId, "Trade", 1, correlationId, causedBy);
+        var domainEvent = DomainEventHelpers.CreateTradeCreatedEvent(aggregateId, 1, correlationId, causedBy);
         var events = new List<IDomainEvent> { domainEvent };
 
-        _mockSerializer.Setup(s => s.Serialize(It.IsAny<IDomainEvent>()))
-            .ReturnsAsync(new SerializedEvent("TestDomainEvent", 1, "{\"test\": \"data\"}", "test-schema", DateTime.UtcNow, new Dictionary<string, string>()));
-
-        await _repository.SaveEventsAsync(aggregateId, partitionKey, events, 0);
+        await EventStoreRepository.SaveEventsAsync(aggregateId, partitionKey, events, 0);
 
         var savedEvents = await Context.EventStore.ToListAsync();
         savedEvents.Should().HaveCount(1);
@@ -63,18 +51,15 @@ public class EventStoreRepositoryTests : SqlServerTestBase
         var aggregateId = Guid.NewGuid().ToString();
         var partitionKey = "TRADER001:AAPL";
         
-        var existingEvent = new TestDomainEvent(aggregateId, "Trade", 1, Guid.NewGuid().ToString(), "TestSystem");
+        var existingEvent = DomainEventHelpers.CreateTradeCreatedEvent(aggregateId, 1, Guid.NewGuid().ToString(), "TestSystem");
         var events = new List<IDomainEvent> { existingEvent };
 
-        _mockSerializer.Setup(s => s.Serialize(It.IsAny<IDomainEvent>()))
-            .ReturnsAsync(new SerializedEvent("TestDomainEvent", 1, "{\"test\": \"data\"}", "test-schema", DateTime.UtcNow, new Dictionary<string, string>()));
+        await EventStoreRepository.SaveEventsAsync(aggregateId, partitionKey, events, 0);
 
-        await _repository.SaveEventsAsync(aggregateId, partitionKey, events, 0);
-
-        var newEvent = new TestDomainEvent(aggregateId, "Trade", 2, Guid.NewGuid().ToString(), "TestSystem");
+        var newEvent = DomainEventHelpers.CreateTradeStatusChangedEvent(aggregateId, 2, Guid.NewGuid().ToString(), "TestSystem");
         var newEvents = new List<IDomainEvent> { newEvent };
 
-        var act = async () => await _repository.SaveEventsAsync(aggregateId, partitionKey, newEvents, 0);
+        var act = async () => await EventStoreRepository.SaveEventsAsync(aggregateId, partitionKey, newEvents, 0);
         
         await act.Should().ThrowAsync<InvalidOperationException>()
             .WithMessage("*Concurrency conflict*");
@@ -87,14 +72,13 @@ public class EventStoreRepositoryTests : SqlServerTestBase
         var partitionKey = "TRADER001:AAPL";
         var eventId = Guid.NewGuid().ToString();
         
-        var domainEvent = new TestDomainEvent(aggregateId, "Trade", 1, Guid.NewGuid().ToString(), "TestSystem", eventId);
+        var domainEvent = DomainEventHelpers.CreateTradeCreatedEvent(aggregateId, 1, Guid.NewGuid().ToString(), "TestSystem");
+        // Set the specific eventId for this test
+        typeof(Core.Events.DomainEventBase).GetProperty("EventId")!.SetValue(domainEvent, eventId);
         var events = new List<IDomainEvent> { domainEvent };
 
-        _mockSerializer.Setup(s => s.Serialize(It.IsAny<IDomainEvent>()))
-            .ReturnsAsync(new SerializedEvent("TestDomainEvent", 1, "{\"test\": \"data\"}", "test-schema", DateTime.UtcNow, new Dictionary<string, string>()));
-
-        await _repository.SaveEventsAsync(aggregateId, partitionKey, events, 0);
-        await _repository.SaveEventsAsync(aggregateId, partitionKey, events, 1);
+        await EventStoreRepository.SaveEventsAsync(aggregateId, partitionKey, events, 0);
+        await EventStoreRepository.SaveEventsAsync(aggregateId, partitionKey, events, 1);
 
         var savedEvents = await Context.EventStore.ToListAsync();
         savedEvents.Should().HaveCount(1);
@@ -106,20 +90,13 @@ public class EventStoreRepositoryTests : SqlServerTestBase
         var aggregateId = Guid.NewGuid().ToString();
         var partitionKey = "TRADER001:AAPL";
         
-        var event1 = new TestDomainEvent(aggregateId, "Trade", 1, Guid.NewGuid().ToString(), "TestSystem");
-        var event2 = new TestDomainEvent(aggregateId, "Trade", 2, Guid.NewGuid().ToString(), "TestSystem");
+        var event1 = DomainEventHelpers.CreateTradeCreatedEvent(aggregateId, 1, Guid.NewGuid().ToString(), "TestSystem");
+        var event2 = DomainEventHelpers.CreateTradeStatusChangedEvent(aggregateId, 2, Guid.NewGuid().ToString(), "TestSystem");
         var events = new List<IDomainEvent> { event1, event2 };
 
-        _mockSerializer.Setup(s => s.Serialize(It.IsAny<IDomainEvent>()))
-            .ReturnsAsync(new SerializedEvent("TestDomainEvent", 1, "{\"test\": \"data\"}", "test-schema", DateTime.UtcNow, new Dictionary<string, string>()));
-        
-        _mockSerializer.SetupSequence(s => s.Deserialize(It.IsAny<SerializedEvent>()))
-            .Returns(event1)
-            .Returns(event2);
+        await EventStoreRepository.SaveEventsAsync(aggregateId, partitionKey, events, 0);
 
-        await _repository.SaveEventsAsync(aggregateId, partitionKey, events, 0);
-
-        var retrievedEvents = await _repository.GetEventsAsync(aggregateId);
+        var retrievedEvents = await EventStoreRepository.GetEventsAsync(aggregateId);
 
         retrievedEvents.Should().HaveCount(2);
         retrievedEvents.First().AggregateVersion.Should().Be(1);
@@ -133,14 +110,14 @@ public class EventStoreRepositoryTests : SqlServerTestBase
         var requestHash = Guid.NewGuid().ToString();
         var aggregateId = Guid.NewGuid().ToString();
 
-        await _repository.SaveIdempotencyAsync(
+        await EventStoreRepository.SaveIdempotencyAsync(
             idempotencyKey, 
             aggregateId, 
             requestHash, 
             "{\"response\": \"data\"}", 
             TimeSpan.FromHours(1));
 
-        var result = await _repository.CheckIdempotencyAsync(idempotencyKey, requestHash);
+        var result = await EventStoreRepository.CheckIdempotencyAsync(idempotencyKey, requestHash);
 
         result.Should().BeTrue();
     }
@@ -152,7 +129,7 @@ public class EventStoreRepositoryTests : SqlServerTestBase
         var requestHash = Guid.NewGuid().ToString();
         var aggregateId = Guid.NewGuid().ToString();
 
-        await _repository.SaveIdempotencyAsync(
+        await EventStoreRepository.SaveIdempotencyAsync(
             idempotencyKey, 
             aggregateId, 
             requestHash, 
@@ -161,7 +138,7 @@ public class EventStoreRepositoryTests : SqlServerTestBase
 
         await Task.Delay(10);
 
-        var result = await _repository.CheckIdempotencyAsync(idempotencyKey, requestHash);
+        var result = await EventStoreRepository.CheckIdempotencyAsync(idempotencyKey, requestHash);
 
         result.Should().BeFalse();
     }
@@ -174,14 +151,14 @@ public class EventStoreRepositoryTests : SqlServerTestBase
         var aggregateId = Guid.NewGuid().ToString();
         var responseData = "{\"response\": \"data\"}";
 
-        await _repository.SaveIdempotencyAsync(
+        await EventStoreRepository.SaveIdempotencyAsync(
             idempotencyKey, 
             aggregateId, 
             requestHash, 
             responseData, 
             TimeSpan.FromHours(1));
 
-        var result = await _repository.GetIdempotentResponseAsync(idempotencyKey, requestHash);
+        var result = await EventStoreRepository.GetIdempotentResponseAsync(idempotencyKey, requestHash);
 
         result.Should().Be(responseData);
     }
@@ -191,15 +168,12 @@ public class EventStoreRepositoryTests : SqlServerTestBase
     {
         var aggregateId = Guid.NewGuid().ToString();
         var partitionKey = "TRADER001:AAPL";
-        var domainEvent = new TestDomainEvent(aggregateId, "Trade", 1, Guid.NewGuid().ToString(), "TestSystem");
+        var domainEvent = DomainEventHelpers.CreateTradeCreatedEvent(aggregateId, 1, Guid.NewGuid().ToString(), "TestSystem");
         var events = new List<IDomainEvent> { domainEvent };
 
-        _mockSerializer.Setup(s => s.Serialize(It.IsAny<IDomainEvent>()))
-            .ReturnsAsync(new SerializedEvent("TestDomainEvent", 1, "{\"test\": \"data\"}", "test-schema", DateTime.UtcNow, new Dictionary<string, string>()));
+        await EventStoreRepository.SaveEventsAsync(aggregateId, partitionKey, events, 0);
 
-        await _repository.SaveEventsAsync(aggregateId, partitionKey, events, 0);
-
-        await _repository.MarkEventsAsProcessedAsync(new[] { domainEvent.EventId });
+        await EventStoreRepository.MarkEventsAsProcessedAsync(new[] { domainEvent.EventId });
 
         var savedEvent = await Context.EventStore.FirstAsync();
         savedEvent.IsProcessed.Should().BeTrue();
@@ -212,20 +186,14 @@ public class EventStoreRepositoryTests : SqlServerTestBase
         var aggregateId = Guid.NewGuid().ToString();
         var partitionKey = "TRADER001:AAPL";
         
-        var event1 = new TestDomainEvent(aggregateId, "Trade", 1, Guid.NewGuid().ToString(), "TestSystem");
-        var event2 = new TestDomainEvent(aggregateId, "Trade", 2, Guid.NewGuid().ToString(), "TestSystem");
+        var event1 = DomainEventHelpers.CreateTradeCreatedEvent(aggregateId, 1, Guid.NewGuid().ToString(), "TestSystem");
+        var event2 = DomainEventHelpers.CreateTradeStatusChangedEvent(aggregateId, 2, Guid.NewGuid().ToString(), "TestSystem");
         var events = new List<IDomainEvent> { event1, event2 };
 
-        _mockSerializer.Setup(s => s.Serialize(It.IsAny<IDomainEvent>()))
-            .ReturnsAsync(new SerializedEvent("TestDomainEvent", 1, "{\"test\": \"data\"}", "test-schema", DateTime.UtcNow, new Dictionary<string, string>()));
-        
-        _mockSerializer.Setup(s => s.Deserialize(It.IsAny<SerializedEvent>()))
-            .Returns(event2);
+        await EventStoreRepository.SaveEventsAsync(aggregateId, partitionKey, events, 0);
+        await EventStoreRepository.MarkEventsAsProcessedAsync(new[] { event1.EventId });
 
-        await _repository.SaveEventsAsync(aggregateId, partitionKey, events, 0);
-        await _repository.MarkEventsAsProcessedAsync(new[] { event1.EventId });
-
-        var unprocessedEvents = await _repository.GetUnprocessedEventsAsync();
+        var unprocessedEvents = await EventStoreRepository.GetUnprocessedEventsAsync();
 
         unprocessedEvents.Should().HaveCount(1);
     }

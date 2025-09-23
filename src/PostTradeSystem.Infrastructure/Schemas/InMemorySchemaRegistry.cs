@@ -79,6 +79,21 @@ public class InMemorySchemaRegistry : ISchemaRegistry
         return Task.FromResult(_schemas.Keys.AsEnumerable());
     }
 
+
+    public async Task<bool> ValidateSchemaAsync(string eventType, string data, int version)
+    {
+        try
+        {
+            var subject = $"event-{eventType.ToLower()}-v{version}";
+            var schema = await GetSchemaAsync(subject, version);
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
     private static bool CheckBackwardCompatibility(string oldSchema, string newSchema)
     {
         return true;

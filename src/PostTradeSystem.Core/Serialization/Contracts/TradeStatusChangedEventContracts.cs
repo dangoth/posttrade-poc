@@ -4,8 +4,8 @@ namespace PostTradeSystem.Core.Serialization.Contracts;
 
 public class TradeStatusChangedEventV1 : IVersionedEventContract
 {
-    public int SchemaVersion { get; set; } = 1;
-    public string EventType { get; set; } = "TradeStatusChanged";
+    public int SchemaVersion => 1;
+    public string EventType => "TradeStatusChanged";
 
     public string EventId { get; set; } = string.Empty;
     public string AggregateId { get; set; } = string.Empty;
@@ -22,8 +22,8 @@ public class TradeStatusChangedEventV1 : IVersionedEventContract
 
 public class TradeStatusChangedEventV2 : IVersionedEventContract
 {
-    public int SchemaVersion { get; set; } = 2;
-    public string EventType { get; set; } = "TradeStatusChanged";
+    public int SchemaVersion => 2;
+    public string EventType => "TradeStatusChanged";
 
     public string EventId { get; set; } = string.Empty;
     public string AggregateId { get; set; } = string.Empty;
@@ -42,7 +42,7 @@ public class TradeStatusChangedEventV2 : IVersionedEventContract
     public string AuditTrail { get; set; } = string.Empty;
 }
 
-public class TradeStatusChangedEventV1ToV2Converter : IEventVersionConverter<TradeStatusChangedEventV1, TradeStatusChangedEventV2>
+public class TradeStatusChangedEventV1ToV2Converter : IEventConverter<TradeStatusChangedEventV1, TradeStatusChangedEventV2>
 {
     public TradeStatusChangedEventV2 Convert(TradeStatusChangedEventV1 source)
     {
@@ -65,13 +65,13 @@ public class TradeStatusChangedEventV1ToV2Converter : IEventVersionConverter<Tra
         };
     }
 
-    public bool CanConvert(int fromSchemaVersion, int toSchemaVersion)
+    public bool CanConvert(int fromVersion, int toVersion)
     {
-        return fromSchemaVersion == 1 && toSchemaVersion == 2;
+        return fromVersion == 1 && toVersion == 2;
     }
 }
 
-public class TradeStatusChangedEventV2ToV1Converter : IEventVersionConverter<TradeStatusChangedEventV2, TradeStatusChangedEventV1>
+public class TradeStatusChangedEventV2ToV1Converter : IEventConverter<TradeStatusChangedEventV2, TradeStatusChangedEventV1>
 {
     public TradeStatusChangedEventV1 Convert(TradeStatusChangedEventV2 source)
     {
@@ -90,8 +90,8 @@ public class TradeStatusChangedEventV2ToV1Converter : IEventVersionConverter<Tra
         };
     }
 
-    public bool CanConvert(int fromSchemaVersion, int toSchemaVersion)
+    public bool CanConvert(int fromVersion, int toVersion)
     {
-        return fromSchemaVersion == 2 && toSchemaVersion == 1;
+        return fromVersion == 2 && toVersion == 1;
     }
 }

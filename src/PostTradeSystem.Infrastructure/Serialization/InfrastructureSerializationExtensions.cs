@@ -1,5 +1,6 @@
 using Microsoft.Extensions.DependencyInjection;
 using PostTradeSystem.Core.Serialization;
+using PostTradeSystem.Core.Services;
 using PostTradeSystem.Core.Schemas;
 using PostTradeSystem.Infrastructure.Schemas;
 

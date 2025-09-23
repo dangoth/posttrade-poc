@@ -3,6 +3,9 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using PostTradeSystem.Infrastructure.Data;
 using PostTradeSystem.Infrastructure.Repositories;
+using PostTradeSystem.Infrastructure.Schemas;
+using PostTradeSystem.Core.Services;
+using PostTradeSystem.Core.Schemas;
 
 namespace PostTradeSystem.Infrastructure.Extensions;
 
@@ -30,8 +33,6 @@ public static class ServiceCollectionExtensions
             options.EnableDetailedErrors(true);
         });
 
-        // Note: IEventSerializer is registered in AddSerializationManagement extension method
-        // This ensures proper dependency resolution with SerializationManagementService
         
         services.AddScoped<IEventStoreRepository, EventStoreRepository>();
         
@@ -40,6 +41,19 @@ public static class ServiceCollectionExtensions
         services.AddScoped<Func<string, string, IEnumerable<Core.Events.IDomainEvent>, Core.Aggregates.TradeAggregate>>(
             provider => (id, partitionKey, events) => Core.Aggregates.TradeAggregate.FromHistory(id, partitionKey, events));
         
+        services.AddSingleton<JsonSchemaValidator>(provider =>
+        {
+            var validator = new JsonSchemaValidator();
+            
+            // Register message schemas
+            validator.RegisterSchema("EquityTradeMessage", MessageSchemas.EquityTradeMessageSchema);
+            validator.RegisterSchema("FxTradeMessage", MessageSchemas.FxTradeMessageSchema);
+            validator.RegisterSchema("OptionTradeMessage", MessageSchemas.OptionTradeMessageSchema);
+            validator.RegisterSchema("TradeMessage", MessageSchemas.TradeMessageSchema);
+            validator.RegisterSchema("TradeMessageEnvelope", MessageSchemas.TradeMessageEnvelopeSchema);
+            
+            return validator;
+        });
 
         return services;
     }

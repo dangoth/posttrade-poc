@@ -19,7 +19,7 @@ public class KafkaEventSerializer
 
     public async Task<KafkaMessage> SerializeForKafkaAsync(IDomainEvent domainEvent)
     {
-        var serializedEvent = await _eventSerializer.Serialize(domainEvent);
+        var serializedEvent = await _eventSerializer.SerializeAsync(domainEvent);
         
         var headers = KafkaHeaderUtility.CreateEventHeaders(
             serializedEvent.EventType,
@@ -39,7 +39,7 @@ public class KafkaEventSerializer
             Topic: GetTopicName(serializedEvent.EventType));
     }
 
-    public IDomainEvent DeserializeFromKafka(KafkaMessage kafkaMessage)
+    public async Task<IDomainEvent> DeserializeFromKafka(KafkaMessage kafkaMessage)
     {
         var eventType = KafkaHeaderUtility.GetHeaderValue(kafkaMessage.Headers, "event-type");
         var version = int.Parse(KafkaHeaderUtility.GetHeaderValue(kafkaMessage.Headers, "event-version"));
@@ -51,7 +51,7 @@ public class KafkaEventSerializer
         var serializedEvent = new SerializedEvent(
             eventType, version, kafkaMessage.Value, schemaId, serializedAt, metadata);
 
-        return _eventSerializer.Deserialize(serializedEvent);
+        return await _eventSerializer.DeserializeAsync(serializedEvent);
     }
 
     public bool CanDeserialize(KafkaMessage kafkaMessage)
@@ -66,7 +66,7 @@ public class KafkaEventSerializer
             var eventType = KafkaHeaderUtility.GetHeaderValue(kafkaMessage.Headers, "event-type");
             var version = int.Parse(KafkaHeaderUtility.GetHeaderValue(kafkaMessage.Headers, "event-version"));
 
-            return _eventSerializer.CanHandle(eventType, version);
+            return _serializationService.CanHandle(eventType, version);
         }
         catch
         {

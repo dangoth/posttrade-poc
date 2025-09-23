@@ -1,10 +1,15 @@
 using Confluent.Kafka;
 using PostTradeSystem.Core.Messages;
 using PostTradeSystem.Core.Serialization;
+using PostTradeSystem.Core.Events;
+using PostTradeSystem.Core.Schemas;
+using PostTradeSystem.Core.Helpers;
+using PostTradeSystem.Infrastructure.Repositories;
 using System.Text.Json;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using PostTradeSystem.Infrastructure.Health;
 
 namespace PostTradeSystem.Infrastructure.Kafka;
@@ -14,6 +19,7 @@ public class KafkaConsumerService : BackgroundService
     private readonly IConsumer<string, string> _consumer;
     private readonly SerializationManagementService _serializationService;
     private readonly KafkaHealthService _healthService;
+    private readonly IServiceProvider _serviceProvider;
     private readonly ILogger<KafkaConsumerService> _logger;
     private readonly JsonSerializerOptions _jsonOptions;
     private readonly string[] _topics;
@@ -22,11 +28,13 @@ public class KafkaConsumerService : BackgroundService
         IConfiguration configuration, 
         SerializationManagementService serializationService,
         KafkaHealthService healthService,
+        IServiceProvider serviceProvider,
         ILogger<KafkaConsumerService> logger)
     {
         _logger = logger;
         _healthService = healthService;
         _serializationService = serializationService;
+        _serviceProvider = serviceProvider;
         
         var kafkaBootstrapServers = configuration.GetSection("Kafka:BootstrapServers").Value ?? 
                                    configuration.GetConnectionString("Kafka") ?? 
@@ -158,7 +166,7 @@ public class KafkaConsumerService : BackgroundService
         }
     }
 
-    private Task ProcessMessageAsync(ConsumeResult<string, string> consumeResult)
+    private async Task ProcessMessageAsync(ConsumeResult<string, string> consumeResult)
     {
         var message = consumeResult.Message;
         var messageTypeHeader = message.Headers?.FirstOrDefault(h => h.Key == "messageType");
@@ -167,31 +175,63 @@ public class KafkaConsumerService : BackgroundService
         {
             _logger.LogWarning("Message without messageType header received from {Topic}:{Partition}:{Offset}", 
                 consumeResult.Topic, consumeResult.Partition, consumeResult.Offset);
-            return Task.CompletedTask;
+            return;
         }
 
         var messageType = System.Text.Encoding.UTF8.GetString(messageTypeHeader.GetValueBytes());
-        
+        var correlationIdHeader = message.Headers?.FirstOrDefault(h => h.Key == "correlationId");
+        var correlationId = correlationIdHeader != null ? 
+            System.Text.Encoding.UTF8.GetString(correlationIdHeader.GetValueBytes()) : 
+            Guid.NewGuid().ToString();
 
         try
         {
-            object? envelope = messageType.ToUpperInvariant() switch
+            using var scope = _serviceProvider.CreateScope();
+            var schemaValidator = scope.ServiceProvider.GetRequiredService<JsonSchemaValidator>();
+            var eventStoreRepository = scope.ServiceProvider.GetRequiredService<IEventStoreRepository>();
+
+            var schemaValidationResult = ValidateMessageSchema(schemaValidator, messageType, message.Value);
+            if (!schemaValidationResult.IsValid)
             {
-                "EQUITY" => JsonSerializer.Deserialize<TradeMessageEnvelope<EquityTradeMessage>>(message.Value, _jsonOptions),
-                "FX" => JsonSerializer.Deserialize<TradeMessageEnvelope<FxTradeMessage>>(message.Value, _jsonOptions),
-                "OPTION" => JsonSerializer.Deserialize<TradeMessageEnvelope<OptionTradeMessage>>(message.Value, _jsonOptions),
-                _ => throw new NotSupportedException($"Unknown message type: {messageType}")
-            };
+                _logger.LogError("Schema validation failed for {MessageType} from {Topic}:{Partition}:{Offset}. Error: {Error}", 
+                    messageType, consumeResult.Topic, consumeResult.Partition, consumeResult.Offset, 
+                    schemaValidationResult.ErrorMessage);
+                return;
+            }
+
+            var messageKey = $"{consumeResult.Topic}:{consumeResult.Partition}:{consumeResult.Offset}";
+            var requestHash = EventStoreRepository.ComputeHash(message.Value);
             
-            var messageId = envelope switch
+            if (await eventStoreRepository.CheckIdempotencyAsync(messageKey, requestHash))
             {
-                TradeMessageEnvelope<EquityTradeMessage> eq => eq.MessageId,
-                TradeMessageEnvelope<FxTradeMessage> fx => fx.MessageId,
-                TradeMessageEnvelope<OptionTradeMessage> opt => opt.MessageId,
-                _ => "Unknown"
-            };
+                _logger.LogInformation("Duplicate message detected, skipping: {MessageKey}", messageKey);
+                return;
+            }
+
+            var (envelope, tradeEvent) = await DeserializeAndCreateEvent(messageType, message.Value, correlationId);
             
-            _logger.LogInformation("Processed {MessageType} message {MessageId} from {Topic}:{Partition}:{Offset}", 
+            if (envelope == null || tradeEvent == null)
+            {
+                _logger.LogError("Failed to create trade event from {MessageType} message", messageType);
+                return;
+            }
+
+            var partitionKey = CreatePartitionKey(envelope, messageType);
+            await eventStoreRepository.SaveEventsAsync(
+                tradeEvent.AggregateId, 
+                partitionKey, 
+                new[] { tradeEvent }, 
+                0);
+
+            await eventStoreRepository.SaveIdempotencyAsync(
+                messageKey, 
+                tradeEvent.AggregateId, 
+                requestHash, 
+                "processed", 
+                TimeSpan.FromHours(24));
+
+            var messageId = GetMessageId(envelope);
+            _logger.LogInformation("Successfully processed {MessageType} message {MessageId} from {Topic}:{Partition}:{Offset}", 
                 messageType, messageId, consumeResult.Topic, consumeResult.Partition, consumeResult.Offset);
         }
         catch (JsonException ex)
@@ -204,8 +244,181 @@ public class KafkaConsumerService : BackgroundService
             _logger.LogError(ex, "Unsupported message type {MessageType} from {Topic}:{Partition}:{Offset}", 
                 messageType, consumeResult.Topic, consumeResult.Partition, consumeResult.Offset);
         }
-        
-        return Task.CompletedTask;
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error processing message from {Topic}:{Partition}:{Offset}", 
+                consumeResult.Topic, consumeResult.Partition, consumeResult.Offset);
+        }
+    }
+
+    private ValidationResult ValidateMessageSchema(JsonSchemaValidator schemaValidator, string messageType, string messageValue)
+    {
+        try
+        {
+            var schemaKey = messageType.ToUpperInvariant() switch
+            {
+                "EQUITY" => "EquityTradeMessage",
+                "FX" => "FxTradeMessage", 
+                "OPTION" => "OptionTradeMessage",
+                _ => "TradeMessage"
+            };
+
+            var isValid = schemaValidator.ValidateMessage(schemaKey, messageValue, 1);
+            return new ValidationResult(isValid, isValid ? null : $"Schema validation failed for {schemaKey}");
+        }
+        catch (Exception ex)
+        {
+            return new ValidationResult(false, $"Schema validation error: {ex.Message}");
+        }
+    }
+
+    private async Task<(object? envelope, TradeCreatedEvent? tradeEvent)> DeserializeAndCreateEvent(string messageType, string messageValue, string correlationId)
+    {
+        try
+        {
+            return messageType.ToUpperInvariant() switch
+            {
+                "EQUITY" => await ProcessEquityMessage(messageValue, correlationId),
+                "FX" => await ProcessFxMessage(messageValue, correlationId),
+                "OPTION" => await ProcessOptionMessage(messageValue, correlationId),
+                _ => (null, null)
+            };
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error deserializing {MessageType} message", messageType);
+            return (null, null);
+        }
+    }
+
+    private Task<(TradeMessageEnvelope<EquityTradeMessage>? envelope, TradeCreatedEvent? tradeEvent)> ProcessEquityMessage(string messageValue, string correlationId)
+    {
+        var envelope = JsonSerializer.Deserialize<TradeMessageEnvelope<EquityTradeMessage>>(messageValue, _jsonOptions);
+        if (envelope?.Payload == null) return Task.FromResult<(TradeMessageEnvelope<EquityTradeMessage>?, TradeCreatedEvent?)>((null, null));
+
+        var additionalData = new Dictionary<string, object>
+        {
+            ["Symbol"] = envelope.Payload.Symbol ?? string.Empty,
+            ["Exchange"] = envelope.Payload.Exchange ?? string.Empty,
+            ["Sector"] = envelope.Payload.Sector ?? string.Empty,
+            ["DividendRate"] = envelope.Payload.DividendRate,
+            ["Isin"] = envelope.Payload.Isin ?? string.Empty,
+            ["MarketSegment"] = envelope.Payload.MarketSegment ?? string.Empty,
+            ["SourceSystem"] = envelope.Payload.SourceSystem ?? string.Empty
+        };
+
+        var tradeEvent = new TradeCreatedEvent(
+            envelope.Payload.TradeId,
+            envelope.Payload.TraderId,
+            envelope.Payload.InstrumentId,
+            envelope.Payload.Quantity,
+            envelope.Payload.Price,
+            envelope.Payload.Direction,
+            envelope.Payload.TradeDateTime,
+            envelope.Payload.Currency,
+            envelope.Payload.CounterpartyId,
+            "EQUITY",
+            1,
+            correlationId,
+            "KafkaConsumerService",
+            additionalData);
+
+        return Task.FromResult<(TradeMessageEnvelope<EquityTradeMessage>?, TradeCreatedEvent?)>((envelope, tradeEvent));
+    }
+
+    private Task<(TradeMessageEnvelope<FxTradeMessage>? envelope, TradeCreatedEvent? tradeEvent)> ProcessFxMessage(string messageValue, string correlationId)
+    {
+        var envelope = JsonSerializer.Deserialize<TradeMessageEnvelope<FxTradeMessage>>(messageValue, _jsonOptions);
+        if (envelope?.Payload == null) return Task.FromResult<(TradeMessageEnvelope<FxTradeMessage>?, TradeCreatedEvent?)>((null, null));
+
+        var additionalData = new Dictionary<string, object>
+        {
+            ["BaseCurrency"] = envelope.Payload.BaseCurrency ?? string.Empty,
+            ["QuoteCurrency"] = envelope.Payload.QuoteCurrency ?? string.Empty,
+            ["SettlementDate"] = envelope.Payload.SettlementDate,
+            ["SpotRate"] = envelope.Payload.SpotRate,
+            ["ForwardPoints"] = envelope.Payload.ForwardPoints,
+            ["TradeType"] = envelope.Payload.TradeType ?? string.Empty,
+            ["DeliveryMethod"] = envelope.Payload.DeliveryMethod ?? string.Empty,
+            ["SourceSystem"] = envelope.Payload.SourceSystem ?? string.Empty
+        };
+
+        var tradeEvent = new TradeCreatedEvent(
+            envelope.Payload.TradeId,
+            envelope.Payload.TraderId,
+            envelope.Payload.InstrumentId,
+            envelope.Payload.Quantity,
+            envelope.Payload.Price,
+            envelope.Payload.Direction,
+            envelope.Payload.TradeDateTime,
+            envelope.Payload.Currency,
+            envelope.Payload.CounterpartyId,
+            "FX",
+            1,
+            correlationId,
+            "KafkaConsumerService",
+            additionalData);
+
+        return Task.FromResult<(TradeMessageEnvelope<FxTradeMessage>?, TradeCreatedEvent?)>((envelope, tradeEvent));
+    }
+
+    private Task<(TradeMessageEnvelope<OptionTradeMessage>? envelope, TradeCreatedEvent? tradeEvent)> ProcessOptionMessage(string messageValue, string correlationId)
+    {
+        var envelope = JsonSerializer.Deserialize<TradeMessageEnvelope<OptionTradeMessage>>(messageValue, _jsonOptions);
+        if (envelope?.Payload == null) return Task.FromResult<(TradeMessageEnvelope<OptionTradeMessage>?, TradeCreatedEvent?)>((null, null));
+
+        var additionalData = new Dictionary<string, object>
+        {
+            ["UnderlyingSymbol"] = envelope.Payload.UnderlyingSymbol ?? string.Empty,
+            ["StrikePrice"] = envelope.Payload.StrikePrice,
+            ["ExpirationDate"] = envelope.Payload.ExpirationDate,
+            ["OptionType"] = envelope.Payload.OptionType ?? string.Empty,
+            ["Exchange"] = envelope.Payload.Exchange ?? string.Empty,
+            ["ImpliedVolatility"] = envelope.Payload.ImpliedVolatility,
+            ["ContractSize"] = envelope.Payload.ContractSize ?? string.Empty,
+            ["SettlementType"] = envelope.Payload.SettlementType ?? string.Empty,
+            ["SourceSystem"] = envelope.Payload.SourceSystem ?? string.Empty
+        };
+
+        var tradeEvent = new TradeCreatedEvent(
+            envelope.Payload.TradeId,
+            envelope.Payload.TraderId,
+            envelope.Payload.InstrumentId,
+            envelope.Payload.Quantity,
+            envelope.Payload.Price,
+            envelope.Payload.Direction,
+            envelope.Payload.TradeDateTime,
+            envelope.Payload.Currency,
+            envelope.Payload.CounterpartyId,
+            "OPTION",
+            1,
+            correlationId,
+            "KafkaConsumerService",
+            additionalData);
+
+        return Task.FromResult<(TradeMessageEnvelope<OptionTradeMessage>?, TradeCreatedEvent?)>((envelope, tradeEvent));
+    }
+
+    private string CreatePartitionKey(object envelope, string messageType)
+    {
+        return envelope switch
+        {
+            TradeMessageEnvelope<EquityTradeMessage> eq => TradePropertyMapper.CreatePartitionKey(eq.Payload.TraderId, eq.Payload.InstrumentId),
+            TradeMessageEnvelope<FxTradeMessage> fx => TradePropertyMapper.CreatePartitionKey(fx.Payload.TraderId, fx.Payload.InstrumentId),
+            TradeMessageEnvelope<OptionTradeMessage> opt => TradePropertyMapper.CreatePartitionKey(opt.Payload.TraderId, opt.Payload.InstrumentId),
+            _ => $"unknown:{messageType}"
+        };
+    }
+
+    private string GetMessageId(object envelope)
+    {
+        return envelope switch
+        {
+            TradeMessageEnvelope<EquityTradeMessage> eq => eq.MessageId,
+            TradeMessageEnvelope<FxTradeMessage> fx => fx.MessageId,
+            TradeMessageEnvelope<OptionTradeMessage> opt => opt.MessageId,
+            _ => "Unknown"
+        };
     }
 
     public override void Dispose()

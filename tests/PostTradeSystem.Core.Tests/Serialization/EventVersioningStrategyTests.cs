@@ -2,6 +2,7 @@ using FluentAssertions;
 using PostTradeSystem.Core.Events;
 using PostTradeSystem.Core.Schemas;
 using PostTradeSystem.Core.Serialization;
+using PostTradeSystem.Core.Services;
 using PostTradeSystem.Infrastructure.Schemas;
 using Xunit;
 
@@ -16,7 +17,8 @@ public class SerializationManagementServiceTests
         var registry = new EventSerializationRegistry();
         var schemaRegistry = new InMemorySchemaRegistry();
         var validator = new JsonSchemaValidator();
-        _serializationService = new SerializationManagementService(registry, schemaRegistry, validator);
+        var tradeRiskService = new TradeRiskService();
+        _serializationService = new SerializationManagementService(registry, schemaRegistry, validator, tradeRiskService);
     }
 
     [Fact]

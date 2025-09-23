@@ -54,6 +54,7 @@ static void AddKafkaServices(IServiceCollection services)
     services.AddSingleton<KafkaHealthService>();
     services.AddSingleton<KafkaProducerService>();
     services.AddHostedService<KafkaConsumerService>();
+    services.AddHostedService<PostTradeSystem.Infrastructure.BackgroundServices.IdempotencyCleanupService>();
 }
 
 static void AddHealthServices(IServiceCollection services)

@@ -12,7 +12,8 @@ using Xunit;
 
 namespace PostTradeSystem.Infrastructure.Tests.Extensions;
 
-public class ServiceCollectionExtensionsTests : SqlServerTestBase
+[Collection("SqlServer")]
+public class ServiceCollectionExtensionsTests : IntegrationTestBase
 {
     public ServiceCollectionExtensionsTests(SqlServerFixture fixture) : base(fixture)
     {

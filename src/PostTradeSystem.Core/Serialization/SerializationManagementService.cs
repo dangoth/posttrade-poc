@@ -1,6 +1,7 @@
 using PostTradeSystem.Core.Events;
 using PostTradeSystem.Core.Schemas;
 using PostTradeSystem.Core.Serialization.Contracts;
+using PostTradeSystem.Core.Services;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
@@ -13,15 +14,18 @@ public class SerializationManagementService
     private readonly JsonSchemaValidator _validator;
     private readonly JsonSerializerOptions _jsonOptions;
     private readonly Dictionary<string, SerializationInfo> _serializationCache = new();
+    private readonly ITradeRiskService _tradeRiskService;
 
     public SerializationManagementService(
         EventSerializationRegistry registry,
         ISchemaRegistry schemaRegistry,
-        JsonSchemaValidator validator)
+        JsonSchemaValidator validator,
+        ITradeRiskService tradeRiskService)
     {
         _registry = registry;
         _schemaRegistry = schemaRegistry;
         _validator = validator;
+        _tradeRiskService = tradeRiskService;
         _jsonOptions = CreateJsonOptions();
     }
 
@@ -38,6 +42,15 @@ public class SerializationManagementService
     {
         var eventType = GetEventTypeName(domainEvent);
         var schemaVersion = targetSchemaVersion ?? _registry.GetLatestSchemaVersion(eventType);
+        
+        // Debug: Check if contract type exists for this version
+        var contractType = _registry.GetContractType(eventType, schemaVersion);
+        if (contractType == null)
+        {
+            throw new InvalidOperationException(
+                $"No contract registered for event type '{eventType}' schema version {schemaVersion}. " +
+                $"Available versions: [{string.Join(", ", _registry.GetSupportedSchemaVersions(eventType))}]");
+        }
         
         var contract = _registry.ConvertFromDomainEvent(domainEvent, schemaVersion);
         var jsonData = JsonSerializer.Serialize(contract, contract.GetType(), _jsonOptions);
@@ -157,7 +170,14 @@ public class SerializationManagementService
 
     public int GetLatestSchemaVersion(string eventType)
     {
-        return _registry.GetLatestSchemaVersion(eventType);
+        try
+        {
+            return _registry.GetLatestSchemaVersion(eventType);
+        }
+        catch (ArgumentException ex)
+        {
+            throw new ArgumentException($"Event type '{eventType}' not registered. Available event types: [{string.Join(", ", GetSupportedEventTypes())}]", ex);
+        }
     }
 
     public IEnumerable<SerializationInfo> GetCachedSerializationInfo()
@@ -171,23 +191,25 @@ public class SerializationManagementService
 
     private async Task RegisterEventContractsAsync()
     {
-        // TradeCreated Event
-        _registry.RegisterContract<TradeCreatedEventV1>(
-            domainEvent => throw new InvalidOperationException("V1 should not be used for serialization"),
-            contract => ConvertV1ToTradeCreatedEvent(contract));
-
+        // TradeCreated Event - Register V2 first so it becomes the latest version for serialization
         _registry.RegisterContract<TradeCreatedEventV2>(
             domainEvent => ConvertTradeCreatedEventToV2((TradeCreatedEvent)domainEvent),
             contract => ConvertV2ToTradeCreatedEvent(contract));
 
-        // TradeStatusChanged Event
-        _registry.RegisterContract<TradeStatusChangedEventV1>(
-            domainEvent => throw new InvalidOperationException("V1 should not be used for serialization"),
-            contract => ConvertV1ToTradeStatusChangedEvent(contract));
+        // TradeCreated V1 - Only for deserialization of legacy events
+        _registry.RegisterContract<TradeCreatedEventV1>(
+            domainEvent => throw new InvalidOperationException("V1 should not be used for serialization - use V2"),
+            contract => ConvertV1ToTradeCreatedEvent(contract));
 
+        // TradeStatusChanged Event - Register V2 first so it becomes the latest version for serialization
         _registry.RegisterContract<TradeStatusChangedEventV2>(
             domainEvent => ConvertTradeStatusChangedEventToV2((TradeStatusChangedEvent)domainEvent),
             contract => ConvertV2ToTradeStatusChangedEvent(contract));
+
+        // TradeStatusChanged V1 - Only for deserialization of legacy events
+        _registry.RegisterContract<TradeStatusChangedEventV1>(
+            domainEvent => throw new InvalidOperationException("V1 should not be used for serialization - use V2"),
+            contract => ConvertV1ToTradeStatusChangedEvent(contract));
 
         // Single version events
         _registry.RegisterContract<TradeUpdatedEventV1>(
@@ -207,10 +229,10 @@ public class SerializationManagementService
 
     private async Task RegisterEventConvertersAsync()
     {
-        _registry.RegisterConverter(new TradeCreatedEventV1ToV2Converter());
-        _registry.RegisterConverter(new TradeCreatedEventV2ToV1Converter());
-        _registry.RegisterConverter(new TradeStatusChangedEventV1ToV2Converter());
-        _registry.RegisterConverter(new TradeStatusChangedEventV2ToV1Converter());
+        _registry.RegisterConverter<TradeCreatedEventV1, TradeCreatedEventV2>(new TradeCreatedEventV1ToV2Converter());
+        _registry.RegisterConverter<TradeCreatedEventV2, TradeCreatedEventV1>(new TradeCreatedEventV2ToV1Converter());
+        _registry.RegisterConverter<TradeStatusChangedEventV1, TradeStatusChangedEventV2>(new TradeStatusChangedEventV1ToV2Converter());
+        _registry.RegisterConverter<TradeStatusChangedEventV2, TradeStatusChangedEventV1>(new TradeStatusChangedEventV2ToV1Converter());
 
         await Task.CompletedTask;
     }
@@ -347,7 +369,7 @@ public class SerializationManagementService
 
     #region Event Conversion Methods
 
-    private static TradeCreatedEventV2 ConvertTradeCreatedEventToV2(TradeCreatedEvent domainEvent)
+    private TradeCreatedEventV2 ConvertTradeCreatedEventToV2(TradeCreatedEvent domainEvent)
     {
         return new TradeCreatedEventV2
         {
@@ -368,9 +390,9 @@ public class SerializationManagementService
             CounterpartyId = domainEvent.CounterpartyId,
             TradeType = domainEvent.TradeType,
             AdditionalData = new Dictionary<string, object>(domainEvent.AdditionalData),
-            RiskProfile = ExtractRiskProfile(domainEvent.AdditionalData),
-            NotionalValue = domainEvent.Quantity * domainEvent.Price,
-            RegulatoryClassification = DetermineRegulatoryClassification(domainEvent.TradeType)
+            RiskProfile = _tradeRiskService.ExtractRiskProfile(domainEvent.AdditionalData),
+            NotionalValue = _tradeRiskService.CalculateNotionalValue(domainEvent.Quantity, domainEvent.Price),
+            RegulatoryClassification = _tradeRiskService.DetermineRegulatoryClassification(domainEvent.TradeType)
         };
     }
 
@@ -552,25 +574,6 @@ public class SerializationManagementService
             contract.CausedBy);
     }
 
-    private static string ExtractRiskProfile(Dictionary<string, object> additionalData)
-    {
-        if (additionalData.TryGetValue("RiskProfile", out var riskProfile))
-        {
-            return riskProfile.ToString() ?? "STANDARD";
-        }
-        return "STANDARD";
-    }
-
-    private static string DetermineRegulatoryClassification(string tradeType)
-    {
-        return tradeType.ToUpper() switch
-        {
-            "EQUITY" => "MiFID_II_EQUITY",
-            "OPTION" => "MiFID_II_DERIVATIVE",
-            "FX" => "EMIR_FX",
-            _ => "UNCLASSIFIED"
-        };
-    }
 
     #endregion
 
