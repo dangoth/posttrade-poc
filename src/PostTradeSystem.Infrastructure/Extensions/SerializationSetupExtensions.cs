@@ -17,7 +17,6 @@ public static class SerializationSetupExtensions
     
     public static async Task EnsureSerializationInitializedAsync(this IServiceProvider serviceProvider)
     {
-        using var scope = serviceProvider.CreateScope();
-        await scope.ServiceProvider.InitializeSerializationAsync();
+        await serviceProvider.InitializeSerializationAsync();
     }
 }

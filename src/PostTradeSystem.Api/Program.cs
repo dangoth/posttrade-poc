@@ -79,35 +79,33 @@ static async Task ConfigureApplicationAsync(WebApplication app)
 
 static async Task ApplyDatabaseMigrationsAsync(WebApplication app)
 {
-    using var scope = app.Services.CreateScope();
-    var migrationLogger = scope.ServiceProvider.GetRequiredService<ILogger<Program>>();
+    var logger = app.Services.GetRequiredService<ILogger<Program>>();
+    var context = app.Services.GetRequiredService<PostTradeSystem.Infrastructure.Data.PostTradeDbContext>();
     
     try
     {
-        var context = scope.ServiceProvider.GetRequiredService<PostTradeSystem.Infrastructure.Data.PostTradeDbContext>();
         await context.Database.MigrateAsync();
-        migrationLogger.LogInformation("Database migrations applied successfully");
+        logger.LogInformation("Database migrations applied successfully");
     }
     catch (Exception ex)
     {
-        migrationLogger.LogError(ex, "Failed to apply database migrations: {Message}", ex.Message);
+        logger.LogError(ex, "Failed to apply database migrations: {Message}", ex.Message);
         throw;
     }
 }
 
 static async Task InitializeSchemasAsync(WebApplication app)
 {
-    using var scope = app.Services.CreateScope();
-    var schemaLogger = scope.ServiceProvider.GetRequiredService<ILogger<Program>>();
+    var logger = app.Services.GetRequiredService<ILogger<Program>>();
     
     try
     {
-        await scope.ServiceProvider.InitializeSerializationAsync();
-        schemaLogger.LogInformation("Serialization and schema initialization completed successfully");
+        await app.Services.InitializeSerializationAsync();
+        logger.LogInformation("Serialization and schema initialization completed successfully");
     }
     catch (Exception ex)
     {
-        schemaLogger.LogError(ex, "Failed to initialize serialization and schemas: {Message}", ex.Message);
+        logger.LogError(ex, "Failed to initialize serialization and schemas: {Message}", ex.Message);
     }
 }
 

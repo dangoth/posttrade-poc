@@ -34,7 +34,7 @@ public static class ServiceCollectionExtensions
         });
 
         
-        services.AddScoped<IEventStoreRepository, EventStoreRepository>();
+        services.AddSingleton<IEventStoreRepository, EventStoreRepository>();
         
         services.AddScoped(typeof(IAggregateRepository<>), typeof(AggregateRepository<>));
         

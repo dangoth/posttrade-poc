@@ -19,7 +19,8 @@ public class KafkaConsumerService : BackgroundService
     private readonly IConsumer<string, string> _consumer;
     private readonly SerializationManagementService _serializationService;
     private readonly KafkaHealthService _healthService;
-    private readonly IServiceProvider _serviceProvider;
+    private readonly JsonSchemaValidator _schemaValidator;
+    private readonly IEventStoreRepository _eventStoreRepository;
     private readonly ILogger<KafkaConsumerService> _logger;
     private readonly JsonSerializerOptions _jsonOptions;
     private readonly string[] _topics;
@@ -28,13 +29,15 @@ public class KafkaConsumerService : BackgroundService
         IConfiguration configuration, 
         SerializationManagementService serializationService,
         KafkaHealthService healthService,
-        IServiceProvider serviceProvider,
+        JsonSchemaValidator schemaValidator,
+        IEventStoreRepository eventStoreRepository,
         ILogger<KafkaConsumerService> logger)
     {
         _logger = logger;
         _healthService = healthService;
         _serializationService = serializationService;
-        _serviceProvider = serviceProvider;
+        _schemaValidator = schemaValidator;
+        _eventStoreRepository = eventStoreRepository;
         
         var kafkaBootstrapServers = configuration.GetSection("Kafka:BootstrapServers").Value ?? 
                                    configuration.GetConnectionString("Kafka") ?? 
@@ -186,11 +189,7 @@ public class KafkaConsumerService : BackgroundService
 
         try
         {
-            using var scope = _serviceProvider.CreateScope();
-            var schemaValidator = scope.ServiceProvider.GetRequiredService<JsonSchemaValidator>();
-            var eventStoreRepository = scope.ServiceProvider.GetRequiredService<IEventStoreRepository>();
-
-            var schemaValidationResult = ValidateMessageSchema(schemaValidator, messageType, message.Value);
+            var schemaValidationResult = ValidateMessageSchema(_schemaValidator, messageType, message.Value);
             if (!schemaValidationResult.IsValid)
             {
                 _logger.LogError("Schema validation failed for {MessageType} from {Topic}:{Partition}:{Offset}. Error: {Error}", 
@@ -202,7 +201,7 @@ public class KafkaConsumerService : BackgroundService
             var messageKey = $"{consumeResult.Topic}:{consumeResult.Partition}:{consumeResult.Offset}";
             var requestHash = EventStoreRepository.ComputeHash(message.Value);
             
-            if (await eventStoreRepository.CheckIdempotencyAsync(messageKey, requestHash))
+            if (await _eventStoreRepository.CheckIdempotencyAsync(messageKey, requestHash))
             {
                 _logger.LogInformation("Duplicate message detected, skipping: {MessageKey}", messageKey);
                 return;
@@ -217,13 +216,13 @@ public class KafkaConsumerService : BackgroundService
             }
 
             var partitionKey = CreatePartitionKey(envelope, messageType);
-            await eventStoreRepository.SaveEventsAsync(
+            await _eventStoreRepository.SaveEventsAsync(
                 tradeEvent.AggregateId, 
                 partitionKey, 
                 new[] { tradeEvent }, 
                 0);
 
-            await eventStoreRepository.SaveIdempotencyAsync(
+            await _eventStoreRepository.SaveIdempotencyAsync(
                 messageKey, 
                 tradeEvent.AggregateId, 
                 requestHash, 

@@ -111,7 +111,7 @@ public class ServiceCollectionExtensionsTests : IntegrationTestBase
         dbContextDescriptor.Lifetime.Should().Be(ServiceLifetime.Scoped);
 
         var eventStoreDescriptor = services.First(s => s.ServiceType == typeof(IEventStoreRepository));
-        eventStoreDescriptor.Lifetime.Should().Be(ServiceLifetime.Scoped);
+        eventStoreDescriptor.Lifetime.Should().Be(ServiceLifetime.Singleton);
 
         var aggregateRepoDescriptor = services.First(s => s.ServiceType == typeof(IAggregateRepository<>));
         aggregateRepoDescriptor.Lifetime.Should().Be(ServiceLifetime.Scoped);
