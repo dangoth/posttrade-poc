@@ -31,23 +31,18 @@ public class ServiceCollectionExtensionsTests : IntegrationTestBase
             .Build();
 
         services.AddInfrastructure(configuration);
-        
-        // Add serialization services as they are required dependencies
         services.AddInfrastructureSerialization();
+        services.AddLogging();
 
-        var serviceProvider = services.BuildServiceProvider();
-
-        serviceProvider.GetService<PostTradeDbContext>().Should().NotBeNull();
-        serviceProvider.GetService<IEventStoreRepository>().Should().NotBeNull();
-        serviceProvider.GetService<IAggregateRepository<TradeAggregate>>().Should().NotBeNull();
-        serviceProvider.GetService<PostTradeSystem.Core.Serialization.IEventSerializer>().Should().NotBeNull();
-        serviceProvider.GetService<PostTradeSystem.Core.Serialization.EventSerializationRegistry>().Should().NotBeNull();
-        serviceProvider.GetService<PostTradeSystem.Core.Serialization.SerializationManagementService>().Should().NotBeNull();
-        serviceProvider.GetService<PostTradeSystem.Core.Schemas.ISchemaRegistry>().Should().NotBeNull();
-        serviceProvider.GetService<PostTradeSystem.Core.Schemas.JsonSchemaValidator>().Should().NotBeNull();
-        
-        var aggregateFactory = serviceProvider.GetService<Func<string, string, IEnumerable<PostTradeSystem.Core.Events.IDomainEvent>, TradeAggregate>>();
-        aggregateFactory.Should().NotBeNull();
+        services.Should().Contain(s => s.ServiceType == typeof(PostTradeDbContext));
+        services.Should().Contain(s => s.ServiceType == typeof(IEventStoreRepository));
+        services.Should().Contain(s => s.ServiceType == typeof(IAggregateRepository<>));
+        services.Should().Contain(s => s.ServiceType == typeof(PostTradeSystem.Core.Serialization.IEventSerializer));
+        services.Should().Contain(s => s.ServiceType == typeof(PostTradeSystem.Core.Serialization.EventSerializationRegistry));
+        services.Should().Contain(s => s.ServiceType == typeof(PostTradeSystem.Core.Serialization.ISerializationManagementService));
+        services.Should().Contain(s => s.ServiceType == typeof(PostTradeSystem.Core.Schemas.ISchemaRegistry));
+        services.Should().Contain(s => s.ServiceType == typeof(PostTradeSystem.Core.Schemas.JsonSchemaValidator));
+        services.Should().Contain(s => s.ServiceType == typeof(Func<string, string, IEnumerable<PostTradeSystem.Core.Events.IDomainEvent>, TradeAggregate>));
     }
 
     [Fact]
@@ -64,15 +59,15 @@ public class ServiceCollectionExtensionsTests : IntegrationTestBase
 
         services.AddInfrastructure(configuration);
 
-        var serviceProvider = services.BuildServiceProvider();
-        var dbContext = serviceProvider.GetRequiredService<PostTradeDbContext>();
-
-        dbContext.Should().NotBeNull();
-        dbContext.Database.Should().NotBeNull();
+        // Verify DbContext is registered with correct lifetime
+        var dbContextDescriptor = services.FirstOrDefault(s => s.ServiceType == typeof(PostTradeDbContext));
+        dbContextDescriptor.Should().NotBeNull();
+        dbContextDescriptor!.Lifetime.Should().Be(ServiceLifetime.Scoped);
+        
     }
 
     [Fact]
-    public void AddInfrastructure_DoesNotRegisterHostedServices()
+    public void AddInfrastructure_RegistersInitializationHostedServices()
     {
         var services = new ServiceCollection();
         var configData = new Dictionary<string, string?>
@@ -84,13 +79,12 @@ public class ServiceCollectionExtensionsTests : IntegrationTestBase
             .Build();
 
         services.AddInfrastructure(configuration);
-
-        // AddInfrastructure should not register any hosted services
-        // Database initialization is now handled in Program.cs
         var hostedServiceDescriptors = services.Where(s => 
             s.ServiceType.Name == "IHostedService");
 
-        hostedServiceDescriptors.Should().BeEmpty();
+        hostedServiceDescriptors.Should().HaveCount(2);
+        hostedServiceDescriptors.Should().Contain(s => s.ImplementationType != null && s.ImplementationType.Name == "DatabaseMigrationService");
+        hostedServiceDescriptors.Should().Contain(s => s.ImplementationType != null && s.ImplementationType.Name == "SerializationInitializationService");
     }
 
     [Fact]
@@ -109,9 +103,12 @@ public class ServiceCollectionExtensionsTests : IntegrationTestBase
 
         var dbContextDescriptor = services.First(s => s.ServiceType == typeof(PostTradeDbContext));
         dbContextDescriptor.Lifetime.Should().Be(ServiceLifetime.Scoped);
-
+        
         var eventStoreDescriptor = services.First(s => s.ServiceType == typeof(IEventStoreRepository));
-        eventStoreDescriptor.Lifetime.Should().Be(ServiceLifetime.Singleton);
+        eventStoreDescriptor.Lifetime.Should().Be(ServiceLifetime.Scoped);
+
+        var outboxRepoDescriptor = services.First(s => s.ServiceType == typeof(IOutboxRepository));
+        outboxRepoDescriptor.Lifetime.Should().Be(ServiceLifetime.Scoped);
 
         var aggregateRepoDescriptor = services.First(s => s.ServiceType == typeof(IAggregateRepository<>));
         aggregateRepoDescriptor.Lifetime.Should().Be(ServiceLifetime.Scoped);

@@ -1,11 +1,15 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using PostTradeSystem.Infrastructure.Data;
 using PostTradeSystem.Infrastructure.Repositories;
 using PostTradeSystem.Infrastructure.Schemas;
+using PostTradeSystem.Infrastructure.Services;
 using PostTradeSystem.Core.Services;
 using PostTradeSystem.Core.Schemas;
+using PostTradeSystem.Core.Serialization;
+using PostTradeSystem.Infrastructure.Kafka;
 
 namespace PostTradeSystem.Infrastructure.Extensions;
 
@@ -13,16 +17,14 @@ public static class ServiceCollectionExtensions
 {
     public static IServiceCollection AddInfrastructure(this IServiceCollection services, IConfiguration configuration)
     {
+        services.AddSingleton<ITimeProvider, SystemTimeProvider>();
+
         services.AddDbContext<PostTradeDbContext>(options =>
         {
             options.UseSqlServer(
                 configuration.GetConnectionString("DefaultConnection"),
                 sqlOptions =>
                 {
-                    sqlOptions.EnableRetryOnFailure(
-                        maxRetryCount: 3,
-                        maxRetryDelay: TimeSpan.FromSeconds(30),
-                        errorNumbersToAdd: null);
                     sqlOptions.CommandTimeout(30);
 
                     sqlOptions.MigrationsAssembly(typeof(PostTradeDbContext).Assembly.GetName().Name);
@@ -33,10 +35,13 @@ public static class ServiceCollectionExtensions
             options.EnableDetailedErrors(true);
         });
 
-        
-        services.AddSingleton<IEventStoreRepository, EventStoreRepository>();
-        
         services.AddScoped(typeof(IAggregateRepository<>), typeof(AggregateRepository<>));
+        services.AddScoped<IOutboxRepository, OutboxRepository>();
+        services.AddScoped<IEventStoreRepository, EventStoreRepository>();
+        services.AddScoped<IOutboxService, OutboxService>();
+        
+        services.AddHostedService<DatabaseMigrationService>();
+        services.AddHostedService<SerializationInitializationService>();
         
         services.AddScoped<Func<string, string, IEnumerable<Core.Events.IDomainEvent>, Core.Aggregates.TradeAggregate>>(
             provider => (id, partitionKey, events) => Core.Aggregates.TradeAggregate.FromHistory(id, partitionKey, events));

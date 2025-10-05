@@ -14,6 +14,7 @@ public class PostTradeDbContext : DbContext
     public DbSet<SnapshotEntity> Snapshots { get; set; } = null!;
     public DbSet<ProjectionEntity> Projections { get; set; } = null!;
     public DbSet<IdempotencyEntity> IdempotencyKeys { get; set; } = null!;
+    public DbSet<OutboxEventEntity> OutboxEvents { get; set; } = null!;
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {

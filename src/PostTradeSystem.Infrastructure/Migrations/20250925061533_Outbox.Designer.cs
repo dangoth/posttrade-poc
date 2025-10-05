@@ -3,6 +3,7 @@ using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using PostTradeSystem.Infrastructure.Data;
 
@@ -11,9 +12,11 @@ using PostTradeSystem.Infrastructure.Data;
 namespace PostTradeSystem.Infrastructure.Migrations
 {
     [DbContext(typeof(PostTradeDbContext))]
-    partial class PostTradeDbContextModelSnapshot : ModelSnapshot
+    [Migration("20250925061533_Outbox")]
+    partial class Outbox
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -185,13 +188,6 @@ namespace PostTradeSystem.Infrastructure.Migrations
                     b.Property<DateTime>("CreatedAt")
                         .HasColumnType("datetime2");
 
-                    b.Property<string>("DeadLetterReason")
-                        .HasMaxLength(1000)
-                        .HasColumnType("nvarchar(1000)");
-
-                    b.Property<DateTime?>("DeadLetteredAt")
-                        .HasColumnType("datetime2");
-
                     b.Property<string>("ErrorMessage")
                         .HasMaxLength(1000)
                         .HasColumnType("nvarchar(1000)");
@@ -209,11 +205,6 @@ namespace PostTradeSystem.Infrastructure.Migrations
                         .IsRequired()
                         .HasMaxLength(100)
                         .HasColumnType("nvarchar(100)");
-
-                    b.Property<bool>("IsDeadLettered")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("bit")
-                        .HasDefaultValue(false);
 
                     b.Property<bool>("IsProcessed")
                         .ValueGeneratedOnAdd()
@@ -253,14 +244,8 @@ namespace PostTradeSystem.Infrastructure.Migrations
                     b.HasIndex("EventId")
                         .IsUnique();
 
-                    b.HasIndex("IsDeadLettered", "DeadLetteredAt")
-                        .HasDatabaseName("IX_OutboxEvents_IsDeadLettered_DeadLetteredAt");
-
                     b.HasIndex("IsProcessed", "CreatedAt")
                         .HasDatabaseName("IX_OutboxEvents_IsProcessed_CreatedAt");
-
-                    b.HasIndex("IsProcessed", "IsDeadLettered", "RetryCount")
-                        .HasDatabaseName("IX_OutboxEvents_ProcessingStatus");
 
                     b.ToTable("OutboxEvents", (string)null);
                 });

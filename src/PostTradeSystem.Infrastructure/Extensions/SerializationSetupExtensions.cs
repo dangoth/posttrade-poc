@@ -15,8 +15,4 @@ public static class SerializationSetupExtensions
         return services;
     }
     
-    public static async Task EnsureSerializationInitializedAsync(this IServiceProvider serviceProvider)
-    {
-        await serviceProvider.InitializeSerializationAsync();
-    }
 }

@@ -17,27 +17,24 @@ namespace PostTradeSystem.Infrastructure.Kafka;
 public class KafkaConsumerService : BackgroundService
 {
     private readonly IConsumer<string, string> _consumer;
-    private readonly SerializationManagementService _serializationService;
+    private readonly IServiceScopeFactory _serviceScopeFactory;
     private readonly KafkaHealthService _healthService;
     private readonly JsonSchemaValidator _schemaValidator;
-    private readonly IEventStoreRepository _eventStoreRepository;
     private readonly ILogger<KafkaConsumerService> _logger;
     private readonly JsonSerializerOptions _jsonOptions;
     private readonly string[] _topics;
 
     public KafkaConsumerService(
         IConfiguration configuration, 
-        SerializationManagementService serializationService,
+        IServiceScopeFactory serviceScopeFactory,
         KafkaHealthService healthService,
         JsonSchemaValidator schemaValidator,
-        IEventStoreRepository eventStoreRepository,
         ILogger<KafkaConsumerService> logger)
     {
         _logger = logger;
         _healthService = healthService;
-        _serializationService = serializationService;
+        _serviceScopeFactory = serviceScopeFactory;
         _schemaValidator = schemaValidator;
-        _eventStoreRepository = eventStoreRepository;
         
         var kafkaBootstrapServers = configuration.GetSection("Kafka:BootstrapServers").Value ?? 
                                    configuration.GetConnectionString("Kafka") ?? 
@@ -201,7 +198,10 @@ public class KafkaConsumerService : BackgroundService
             var messageKey = $"{consumeResult.Topic}:{consumeResult.Partition}:{consumeResult.Offset}";
             var requestHash = EventStoreRepository.ComputeHash(message.Value);
             
-            if (await _eventStoreRepository.CheckIdempotencyAsync(messageKey, requestHash))
+            using var scope = _serviceScopeFactory.CreateScope();
+            var eventStoreRepository = scope.ServiceProvider.GetRequiredService<IEventStoreRepository>();
+            
+            if (await eventStoreRepository.CheckIdempotencyAsync(messageKey, requestHash))
             {
                 _logger.LogInformation("Duplicate message detected, skipping: {MessageKey}", messageKey);
                 return;
@@ -216,13 +216,13 @@ public class KafkaConsumerService : BackgroundService
             }
 
             var partitionKey = CreatePartitionKey(envelope, messageType);
-            await _eventStoreRepository.SaveEventsAsync(
+            await eventStoreRepository.SaveEventsAsync(
                 tradeEvent.AggregateId, 
                 partitionKey, 
                 new[] { tradeEvent }, 
                 0);
 
-            await _eventStoreRepository.SaveIdempotencyAsync(
+            await eventStoreRepository.SaveIdempotencyAsync(
                 messageKey, 
                 tradeEvent.AggregateId, 
                 requestHash, 

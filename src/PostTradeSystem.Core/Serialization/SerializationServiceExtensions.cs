@@ -27,41 +27,24 @@ public static class SerializationServiceExtensions
         services.AddSingleton<IEventSerializer, EventSerializer>();
         services.AddSingleton<EventSerializationOrchestrator>();
         services.AddSingleton<EventSerializationRegistry>();
-        services.AddSingleton<SerializationManagementService>(provider =>
-        {
-            var registry = provider.GetRequiredService<EventSerializationRegistry>();
-            var schemaRegistry = provider.GetRequiredService<ISchemaRegistry>();
-            var validator = provider.GetRequiredService<JsonSchemaValidator>();
-            var tradeRiskService = provider.GetRequiredService<ITradeRiskService>();
-            return new SerializationManagementService(registry, schemaRegistry, validator, tradeRiskService);
-        });
+        services.AddSingleton<ISerializationManagementService, SerializationManagementService>();
         
-        // Schema services - will be registered by infrastructure layer
+        // Schema services - registered by infrastructure
         services.AddSingleton<JsonSchemaValidator>();
         
         // Event serializer - uses the management service internally for backward compatibility
-        services.AddSingleton<IEventSerializer>(provider =>
-        {
-            var managementService = provider.GetRequiredService<SerializationManagementService>();
-            return new ManagedEventSerializer(managementService);
-        });
+        services.AddSingleton<IEventSerializer, ManagedEventSerializer>();
 
         return services;
     }
 
-    public static async Task InitializeSerializationAsync(this IServiceProvider serviceProvider)
-    {
-        var serializationService = serviceProvider.GetRequiredService<SerializationManagementService>();
-        await serializationService.InitializeAsync();
-    }
 }
 
-// Adapter that implements IEventSerializer using SerializationManagementService
 internal class ManagedEventSerializer : IEventSerializer
 {
-    private readonly SerializationManagementService _managementService;
+    private readonly ISerializationManagementService _managementService;
 
-    public ManagedEventSerializer(SerializationManagementService managementService)
+    public ManagedEventSerializer(ISerializationManagementService managementService)
     {
         _managementService = managementService;
     }

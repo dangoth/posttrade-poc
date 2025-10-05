@@ -9,9 +9,9 @@ namespace PostTradeSystem.Infrastructure.Serialization;
 public class KafkaEventSerializer
 {
     private readonly IEventSerializer _eventSerializer;
-    private readonly SerializationManagementService _serializationService;
+    private readonly ISerializationManagementService _serializationService;
 
-    public KafkaEventSerializer(IEventSerializer eventSerializer, SerializationManagementService serializationService)
+    public KafkaEventSerializer(IEventSerializer eventSerializer, ISerializationManagementService serializationService)
     {
         _eventSerializer = eventSerializer;
         _serializationService = serializationService;

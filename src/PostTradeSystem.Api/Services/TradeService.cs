@@ -5,10 +5,10 @@ namespace PostTradeSystem.Api.Services;
 
 public class TradeService
 {
-    private readonly KafkaProducerService _producer;
+    private readonly IKafkaProducerService _producer;
     private readonly IConfiguration _config;
 
-    public TradeService(KafkaProducerService producer, IConfiguration config)
+    public TradeService(IKafkaProducerService producer, IConfiguration config)
     {
         _producer = producer;
         _config = config;

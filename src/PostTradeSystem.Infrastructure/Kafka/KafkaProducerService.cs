@@ -6,13 +6,13 @@ using Microsoft.Extensions.Configuration;
 
 namespace PostTradeSystem.Infrastructure.Kafka;
 
-public class KafkaProducerService : IDisposable
+public class KafkaProducerService : IKafkaProducerService
 {
     private readonly IProducer<string, string> _producer;
-    private readonly SerializationManagementService _serializationService;
+    private readonly ISerializationManagementService _serializationService;
     private readonly JsonSerializerOptions _jsonOptions;
 
-    public KafkaProducerService(IConfiguration configuration, SerializationManagementService serializationService)
+    public KafkaProducerService(IConfiguration configuration, ISerializationManagementService serializationService)
     {
         var kafkaBootstrapServers = configuration.GetSection("Kafka:BootstrapServers").Value ?? 
                                    configuration.GetConnectionString("Kafka") ?? 
@@ -71,6 +71,31 @@ public class KafkaProducerService : IDisposable
         };
 
         return await _producer.ProduceAsync(topic, kafkaMessage);
+    }
+
+    public async Task<DeliveryResult<string, string>> ProduceAsync(
+        string topic, 
+        string key, 
+        string value, 
+        Dictionary<string, string>? headers = null, 
+        CancellationToken cancellationToken = default)
+    {
+        var kafkaMessage = new Message<string, string>
+        {
+            Key = key,
+            Value = value,
+            Headers = new Headers()
+        };
+
+        if (headers != null)
+        {
+            foreach (var header in headers)
+            {
+                kafkaMessage.Headers.Add(header.Key, System.Text.Encoding.UTF8.GetBytes(header.Value));
+            }
+        }
+
+        return await _producer.ProduceAsync(topic, kafkaMessage, cancellationToken);
     }
 
     public void Dispose()

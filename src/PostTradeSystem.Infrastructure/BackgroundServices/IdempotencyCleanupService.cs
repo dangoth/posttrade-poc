@@ -7,15 +7,15 @@ namespace PostTradeSystem.Infrastructure.BackgroundServices;
 
 public class IdempotencyCleanupService : BackgroundService
 {
-    private readonly IEventStoreRepository _eventStoreRepository;
+    private readonly IServiceScopeFactory _serviceScopeFactory;
     private readonly ILogger<IdempotencyCleanupService> _logger;
     private readonly TimeSpan _cleanupInterval = TimeSpan.FromHours(24);
 
     public IdempotencyCleanupService(
-        IEventStoreRepository eventStoreRepository,
+        IServiceScopeFactory serviceScopeFactory,
         ILogger<IdempotencyCleanupService> logger)
     {
-        _eventStoreRepository = eventStoreRepository;
+        _serviceScopeFactory = serviceScopeFactory;
         _logger = logger;
     }
 
@@ -76,7 +76,9 @@ public class IdempotencyCleanupService : BackgroundService
         {
             _logger.LogInformation("Starting daily idempotency keys cleanup");
 
-            await _eventStoreRepository.CleanupExpiredIdempotencyKeysAsync(cancellationToken);
+            using var scope = _serviceScopeFactory.CreateScope();
+            var eventStoreRepository = scope.ServiceProvider.GetRequiredService<IEventStoreRepository>();
+            await eventStoreRepository.CleanupExpiredIdempotencyKeysAsync(cancellationToken);
 
             _logger.LogInformation("Daily idempotency keys cleanup completed successfully");
         }

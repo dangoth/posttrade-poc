@@ -1,8 +1,10 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 using PostTradeSystem.Core.Events;
 using PostTradeSystem.Core.Serialization;
 using PostTradeSystem.Infrastructure.Data;
 using PostTradeSystem.Infrastructure.Entities;
+using PostTradeSystem.Infrastructure.Services;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -12,17 +14,28 @@ namespace PostTradeSystem.Infrastructure.Repositories;
 public class EventStoreRepository : IEventStoreRepository
 {
     private readonly PostTradeDbContext _context;
-    private readonly SerializationManagementService _serializationService;
+    private readonly ISerializationManagementService _serializationService;
+    private readonly IOutboxService? _outboxService;
+    private readonly ILogger<EventStoreRepository> _logger;
 
-    public EventStoreRepository(PostTradeDbContext context, SerializationManagementService serializationService)
+    public EventStoreRepository(
+        PostTradeDbContext context, 
+        ISerializationManagementService serializationService,
+        ILogger<EventStoreRepository> logger,
+        IOutboxService? outboxService = null)
     {
         _context = context;
         _serializationService = serializationService;
+        _logger = logger;
+        _outboxService = outboxService;
     }
+
+    private DbSet<EventStoreEntity> EventStore => _context.Set<EventStoreEntity>();
+    private DbSet<IdempotencyEntity> IdempotencyKeys => _context.Set<IdempotencyEntity>();
 
     public async Task<IEnumerable<IDomainEvent>> GetEventsAsync(string aggregateId, long fromVersion = 0, CancellationToken cancellationToken = default)
     {
-        var eventEntities = await _context.EventStore
+        var eventEntities = await EventStore
             .Where(e => e.AggregateId == aggregateId && e.AggregateVersion > fromVersion)
             .OrderBy(e => e.AggregateVersion)
             .ToListAsync(cancellationToken);
@@ -30,16 +43,48 @@ public class EventStoreRepository : IEventStoreRepository
         var events = new List<IDomainEvent>();
         foreach (var entity in eventEntities)
         {
-            var schemaVersion = ExtractSchemaVersionFromMetadata(entity.Metadata);
-            var serializedEvent = new SerializedEvent(
-                entity.EventType,
-                schemaVersion,
-                entity.EventData,
-                "default",
-                entity.OccurredAt,
-                new Dictionary<string, string>());
-            var domainEvent = _serializationService.Deserialize(serializedEvent);
-            events.Add(domainEvent);
+            var metadataResult = ExtractSchemaVersionFromMetadata(entity.Metadata, entity.EventId, entity.AggregateId, entity.OccurredAt);
+            
+            if (metadataResult.ShouldDeadLetter)
+            {
+                _logger.LogError("Skipping event {EventId} due to metadata parsing failure: {Reason}", 
+                    entity.EventId, metadataResult.DeadLetterReason);
+                
+                if (_outboxService != null)
+                {
+                    await MoveEventToDeadLetterAsync(entity, metadataResult.DeadLetterReason!);
+                }
+                continue;
+            }
+
+            if (!metadataResult.IsReliable)
+            {
+                _logger.LogWarning("Using unreliable schema version {Version} for event {EventId}: {Warning}", 
+                    metadataResult.SchemaVersion, entity.EventId, metadataResult.WarningMessage);
+            }
+
+            try
+            {
+                var serializedEvent = new SerializedEvent(
+                    entity.EventType,
+                    metadataResult.SchemaVersion,
+                    entity.EventData,
+                    "default",
+                    entity.OccurredAt,
+                    new Dictionary<string, string>());
+                var domainEvent = _serializationService.Deserialize(serializedEvent);
+                events.Add(domainEvent);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to deserialize event {EventId} with schema version {Version}. Moving to dead letter queue", 
+                    entity.EventId, metadataResult.SchemaVersion);
+                
+                if (_outboxService != null)
+                {
+                    await MoveEventToDeadLetterAsync(entity, $"Deserialization failed: {ex.Message}");
+                }
+            }
         }
 
         return events;
@@ -47,7 +92,7 @@ public class EventStoreRepository : IEventStoreRepository
 
     public async Task<IEnumerable<IDomainEvent>> GetEventsByPartitionKeyAsync(string partitionKey, long fromVersion = 0, CancellationToken cancellationToken = default)
     {
-        var eventEntities = await _context.EventStore
+        var eventEntities = await EventStore
             .Where(e => e.PartitionKey == partitionKey && e.AggregateVersion > fromVersion)
             .OrderBy(e => e.CreatedAt)
             .ThenBy(e => e.AggregateVersion)
@@ -56,10 +101,23 @@ public class EventStoreRepository : IEventStoreRepository
         var events = new List<IDomainEvent>();
         foreach (var entity in eventEntities)
         {
-            var schemaVersion = ExtractSchemaVersionFromMetadata(entity.Metadata);
+            var metadataResult = ExtractSchemaVersionFromMetadata(entity.Metadata, entity.EventId, entity.AggregateId, entity.OccurredAt);
+            
+            if (metadataResult.ShouldDeadLetter)
+            {
+                _logger.LogError("Skipping event {EventId} due to metadata parsing failure: {Reason}", 
+                    entity.EventId, metadataResult.DeadLetterReason);
+                
+                if (_outboxService != null)
+                {
+                    await MoveEventToDeadLetterAsync(entity, metadataResult.DeadLetterReason!);
+                }
+                continue;
+            }
+            
             var serializedEvent = new SerializedEvent(
                 entity.EventType,
-                schemaVersion,
+                metadataResult.SchemaVersion,
                 entity.EventData,
                 "default",
                 entity.OccurredAt,
@@ -73,6 +131,10 @@ public class EventStoreRepository : IEventStoreRepository
 
     public async Task SaveEventsAsync(string aggregateId, string partitionKey, IEnumerable<IDomainEvent> events, long expectedVersion, CancellationToken cancellationToken = default)
     {
+        using var transaction = await _context.Database.BeginTransactionAsync(cancellationToken);
+        
+        try
+        {
             var currentVersion = await GetCurrentVersionAsync(aggregateId, cancellationToken);
             
             if (currentVersion != expectedVersion)
@@ -81,10 +143,11 @@ public class EventStoreRepository : IEventStoreRepository
             }
 
             var eventEntities = new List<EventStoreEntity>();
+            var eventsToPublish = new List<IDomainEvent>();
             
             foreach (var domainEvent in events)
             {
-                var existingEvent = await _context.EventStore
+                var existingEvent = await EventStore
                     .FirstOrDefaultAsync(e => e.EventId == domainEvent.EventId, cancellationToken);
                     
                 if (existingEvent != null)
@@ -107,7 +170,7 @@ public class EventStoreRepository : IEventStoreRepository
                     AggregateType = domainEvent.AggregateType,
                     PartitionKey = partitionKey,
                     AggregateVersion = domainEvent.AggregateVersion,
-                    EventType = eventType,  // Store "TradeCreated" instead of "TradeCreatedEvent"
+                    EventType = eventType,
                     EventData = eventData,
                     Metadata = metadata,
                     OccurredAt = domainEvent.OccurredAt,
@@ -118,19 +181,41 @@ public class EventStoreRepository : IEventStoreRepository
                 };
 
                 eventEntities.Add(eventEntity);
+                eventsToPublish.Add(domainEvent);
             }
 
             if (eventEntities.Any())
             {
-                _context.EventStore.AddRange(eventEntities);
+                EventStore.AddRange(eventEntities);
                 await _context.SaveChangesAsync(cancellationToken);
-            }
 
+                if (_outboxService != null)
+                {
+                    foreach (var domainEvent in eventsToPublish)
+                    {
+                        var topic = DetermineTopicForEvent(domainEvent);
+                        await _outboxService.SaveEventToOutboxAsync(domainEvent, topic, partitionKey, cancellationToken);
+                    }
+                }
+
+                // Commit the transaction - both event store and outbox writes succeed or fail together
+                await transaction.CommitAsync(cancellationToken);
+            }
+            else
+            {
+                await transaction.CommitAsync(cancellationToken);
+            }
+        }
+        catch
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            throw;
+        }
     }
 
     public async Task<bool> CheckIdempotencyAsync(string idempotencyKey, string requestHash, CancellationToken cancellationToken = default)
     {
-        var existing = await _context.IdempotencyKeys
+        var existing = await IdempotencyKeys
             .FirstOrDefaultAsync(i => i.IdempotencyKey == idempotencyKey && i.RequestHash == requestHash, cancellationToken);
 
         return existing != null && existing.ExpiresAt > DateTime.UtcNow;
@@ -148,13 +233,13 @@ public class EventStoreRepository : IEventStoreRepository
             ExpiresAt = DateTime.UtcNow.Add(expiration)
         };
 
-        _context.IdempotencyKeys.Add(entity);
+        IdempotencyKeys.Add(entity);
         await _context.SaveChangesAsync(cancellationToken);
     }
 
     public async Task<string?> GetIdempotentResponseAsync(string idempotencyKey, string requestHash, CancellationToken cancellationToken = default)
     {
-        var entity = await _context.IdempotencyKeys
+        var entity = await IdempotencyKeys
             .FirstOrDefaultAsync(i => i.IdempotencyKey == idempotencyKey && i.RequestHash == requestHash, cancellationToken);
 
         if (entity == null || entity.ExpiresAt <= DateTime.UtcNow)
@@ -167,7 +252,7 @@ public class EventStoreRepository : IEventStoreRepository
 
     public async Task MarkEventsAsProcessedAsync(IEnumerable<string> eventIds, CancellationToken cancellationToken = default)
     {
-        var events = await _context.EventStore
+        var events = await EventStore
             .Where(e => eventIds.Contains(e.EventId))
             .ToListAsync(cancellationToken);
 
@@ -182,7 +267,7 @@ public class EventStoreRepository : IEventStoreRepository
 
     public async Task<IEnumerable<IDomainEvent>> GetUnprocessedEventsAsync(int batchSize = 100, CancellationToken cancellationToken = default)
     {
-        var eventEntities = await _context.EventStore
+        var eventEntities = await EventStore
             .Where(e => !e.IsProcessed)
             .OrderBy(e => e.CreatedAt)
             .Take(batchSize)
@@ -191,10 +276,18 @@ public class EventStoreRepository : IEventStoreRepository
         var events = new List<IDomainEvent>();
         foreach (var entity in eventEntities)
         {
-            var schemaVersion = ExtractSchemaVersionFromMetadata(entity.Metadata);
+            var metadataResult = ExtractSchemaVersionFromMetadata(entity.Metadata, entity.EventId, entity.AggregateId, entity.OccurredAt);
+            if (metadataResult.ShouldDeadLetter)
+            {
+                if (_outboxService != null)
+                {
+                    await MoveEventToDeadLetterAsync(entity, metadataResult.DeadLetterReason!);
+                }
+                continue;
+            }
             var serializedEvent = new SerializedEvent(
                 entity.EventType,
-                schemaVersion,
+                metadataResult.SchemaVersion,
                 entity.EventData,
                 "default",
                 entity.OccurredAt,
@@ -208,7 +301,7 @@ public class EventStoreRepository : IEventStoreRepository
 
     private async Task<long> GetCurrentVersionAsync(string aggregateId, CancellationToken cancellationToken)
     {
-        var lastEvent = await _context.EventStore
+        var lastEvent = await EventStore
             .Where(e => e.AggregateId == aggregateId)
             .OrderByDescending(e => e.AggregateVersion)
             .FirstOrDefaultAsync(cancellationToken);
@@ -232,39 +325,109 @@ public class EventStoreRepository : IEventStoreRepository
         return JsonSerializer.Serialize(metadata);
     }
 
-    private static int ExtractSchemaVersionFromMetadata(string metadata)
+    private MetadataParsingResult ExtractSchemaVersionFromMetadata(string metadata, string eventId, string aggregateId, DateTime eventOccurredAt)
     {
+        // Strategy 1: Try to parse explicit SchemaVersion from metadata
         try
         {
             using var document = JsonDocument.Parse(metadata);
             if (document.RootElement.TryGetProperty("SchemaVersion", out var versionElement))
             {
-                if (int.TryParse(versionElement.GetString(), out var version))
+                if (int.TryParse(versionElement.GetString(), out var version) && version > 0)
                 {
-                    return version;
+                    _logger.LogDebug("Successfully extracted schema version {Version} from metadata for event {EventId}", 
+                        version, eventId);
+                    return MetadataParsingResult.Success(version, MetadataParsingStrategy.ExplicitVersion);
+                }
+                else
+                {
+                    _logger.LogWarning("Invalid schema version in metadata for event {EventId}, aggregate {AggregateId}: {Value}", 
+                        eventId, aggregateId, versionElement.GetString());
+                    // Fall through to Strategy 2
                 }
             }
+            else
+            {
+                _logger.LogWarning("Missing SchemaVersion in metadata for event {EventId}, aggregate {AggregateId}", 
+                    eventId, aggregateId);
+                // Fall through to Strategy 2
+            }
         }
-        catch (JsonException)
+        catch (JsonException ex)
         {
-            // If metadata is malformed, fall back to version 1
+            var deadLetterReason = $"Malformed JSON metadata: {ex.Message}";
+            _logger.LogError(ex, "Failed to parse metadata JSON for event {EventId}, aggregate {AggregateId}. Moving to dead letter queue", 
+                eventId, aggregateId);
+            return MetadataParsingResult.DeadLetter(deadLetterReason);
         }
+
+        // Strategy 2: Historical fallback - events before a certain date are likely V1
+        // This is a safer assumption than blindly defaulting to V1
+        var historicalCutoff = new DateTime(2024, 1, 1, 0, 0, 0, DateTimeKind.Utc); // Adjust based on your deployment history
+        var eventCreationTime = eventOccurredAt;
         
-        // Default to version 1 if not found or parsing fails
-        return 1;
+        if (eventCreationTime < historicalCutoff)
+        {
+            var warning = $"Using historical fallback to V1 for event created before {historicalCutoff:yyyy-MM-dd}";
+            _logger.LogWarning("Using historical fallback for event {EventId}, aggregate {AggregateId}: {Warning}", 
+                eventId, aggregateId, warning);
+            return MetadataParsingResult.Warning(1, MetadataParsingStrategy.HistoricalFallback, warning);
+        }
+
+        // Strategy 3: Dead letter for recent events with unparseable metadata
+        var finalDeadLetterReason = "Cannot determine schema version for recent event with malformed metadata";
+        _logger.LogError("Cannot determine schema version for event {EventId}, aggregate {AggregateId}. Moving to dead letter queue: {Reason}", 
+            eventId, aggregateId, finalDeadLetterReason);
+        return MetadataParsingResult.DeadLetter(finalDeadLetterReason);
+    }
+
+    private async Task MoveEventToDeadLetterAsync(EventStoreEntity entity, string reason)
+    {
+        try
+        {
+            // Create a dead letter event that contains the original event data
+            var deadLetterEvent = new DeadLetterEvent(
+                entity.AggregateId,
+                entity.EventType,
+                entity.EventData,
+                entity.Metadata,
+                reason,
+                entity.AggregateVersion,
+                Guid.NewGuid().ToString(),
+                "EventStoreRepository");
+
+            await _outboxService!.SaveEventToOutboxAsync(deadLetterEvent, "events.deadletter", entity.AggregateId);
+            
+            _logger.LogInformation("Successfully moved event {EventId} to dead letter queue with reason: {Reason}", 
+                entity.EventId, reason);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to move event {EventId} to dead letter queue", entity.EventId);
+        }
     }
 
     public async Task CleanupExpiredIdempotencyKeysAsync(CancellationToken cancellationToken = default)
     {
-        var expiredKeys = await _context.IdempotencyKeys
+        var expiredKeys = await IdempotencyKeys
             .Where(i => i.ExpiresAt <= DateTime.UtcNow)
             .ToListAsync(cancellationToken);
 
         if (expiredKeys.Any())
         {
-            _context.IdempotencyKeys.RemoveRange(expiredKeys);
+            IdempotencyKeys.RemoveRange(expiredKeys);
             await _context.SaveChangesAsync(cancellationToken);
         }
+    }
+
+    private static string DetermineTopicForEvent(IDomainEvent domainEvent)
+    {
+        // Route events to appropriate topics based on event type or aggregate type
+        return domainEvent.AggregateType.ToLowerInvariant() switch
+        {
+            "trade" => "events.trades",
+            _ => "events.general"
+        };
     }
 
     public static string ComputeHash(string input)

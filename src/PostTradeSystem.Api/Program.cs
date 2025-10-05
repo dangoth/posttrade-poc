@@ -1,7 +1,5 @@
-using Microsoft.EntityFrameworkCore;
 using PostTradeSystem.Api.Endpoints;
 using PostTradeSystem.Core.Schemas;
-using PostTradeSystem.Core.Serialization;
 using PostTradeSystem.Infrastructure.Extensions;
 using PostTradeSystem.Infrastructure.Health;
 using PostTradeSystem.Infrastructure.Kafka;
@@ -16,11 +14,10 @@ ConfigureServices(builder);
 
 var app = builder.Build();
 
-await ConfigureApplicationAsync(app);
 ConfigureMiddleware(app);
 ConfigureEndpoints(app);
 
-await RunApplicationAsync(app);
+await app.RunAsync();
 
 static void ConfigureLogging(WebApplicationBuilder builder)
 {
@@ -52,9 +49,11 @@ static void ConfigureServices(WebApplicationBuilder builder)
 static void AddKafkaServices(IServiceCollection services)
 {
     services.AddSingleton<KafkaHealthService>();
-    services.AddSingleton<KafkaProducerService>();
+    services.AddSingleton<IKafkaProducerService, KafkaProducerService>();
     services.AddHostedService<KafkaConsumerService>();
     services.AddHostedService<PostTradeSystem.Infrastructure.BackgroundServices.IdempotencyCleanupService>();
+    services.AddHostedService<PostTradeSystem.Infrastructure.BackgroundServices.OutboxProcessorService>();
+    services.AddHostedService<PostTradeSystem.Infrastructure.BackgroundServices.DeadLetterReprocessorService>();
 }
 
 static void AddHealthServices(IServiceCollection services)
@@ -68,52 +67,8 @@ static void AddApplicationServices(IServiceCollection services)
     services.AddScoped<PostTradeSystem.Api.Services.TradeService>();
 }
 
-static async Task ConfigureApplicationAsync(WebApplication app)
-{
-    if (app.Environment.IsDevelopment())
-    {
-        await ApplyDatabaseMigrationsAsync(app);
-        await InitializeSchemasAsync(app);
-    }
-}
-
-static async Task ApplyDatabaseMigrationsAsync(WebApplication app)
-{
-    var logger = app.Services.GetRequiredService<ILogger<Program>>();
-    var context = app.Services.GetRequiredService<PostTradeSystem.Infrastructure.Data.PostTradeDbContext>();
-    
-    try
-    {
-        await context.Database.MigrateAsync();
-        logger.LogInformation("Database migrations applied successfully");
-    }
-    catch (Exception ex)
-    {
-        logger.LogError(ex, "Failed to apply database migrations: {Message}", ex.Message);
-        throw;
-    }
-}
-
-static async Task InitializeSchemasAsync(WebApplication app)
-{
-    var logger = app.Services.GetRequiredService<ILogger<Program>>();
-    
-    try
-    {
-        await app.Services.InitializeSerializationAsync();
-        logger.LogInformation("Serialization and schema initialization completed successfully");
-    }
-    catch (Exception ex)
-    {
-        logger.LogError(ex, "Failed to initialize serialization and schemas: {Message}", ex.Message);
-    }
-}
-
 static void ConfigureMiddleware(WebApplication app)
 {
-    var logger = app.Services.GetRequiredService<ILogger<Program>>();
-    logger.LogInformation("Starting PostTrade System API in {Environment} environment", app.Environment.EnvironmentName);
-
     app.UseSwagger();
     app.UseSwaggerUI();
 }
@@ -125,6 +80,7 @@ static void ConfigureEndpoints(WebApplication app)
     ConfigureSchemaEndpoints(app);
 
     app.MapTradeEndpoints();
+    app.MapOutboxAdminEndpoints();
 }
 
 static void ConfigureSchemaEndpoints(WebApplication app)
@@ -153,21 +109,3 @@ static void ConfigureSchemaEndpoints(WebApplication app)
     .WithOpenApi();
 }
 
-static async Task RunApplicationAsync(WebApplication app)
-{
-    var logger = app.Services.GetRequiredService<ILogger<Program>>();
-    
-    try
-    {
-        await app.StartAsync();
-        logger.LogInformation("PostTrade System API started successfully on {Urls}", string.Join(", ", app.Urls));
-        
-        await app.WaitForShutdownAsync();
-        logger.LogInformation("Application shutdown completed");
-    }
-    catch (Exception ex)
-    {
-        logger.LogError(ex, "Application failed to start: {Message}", ex.Message);
-        throw;
-    }
-}

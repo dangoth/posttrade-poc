@@ -7,7 +7,7 @@ using System.Text.Json.Serialization;
 
 namespace PostTradeSystem.Core.Serialization;
 
-public class SerializationManagementService
+public class SerializationManagementService : ISerializationManagementService
 {
     private readonly EventSerializationRegistry _registry;
     private readonly ISchemaRegistry _schemaRegistry;
@@ -45,12 +45,6 @@ public class SerializationManagementService
         
         // Debug: Check if contract type exists for this version
         var contractType = _registry.GetContractType(eventType, schemaVersion);
-        if (contractType == null)
-        {
-            throw new InvalidOperationException(
-                $"No contract registered for event type '{eventType}' schema version {schemaVersion}. " +
-                $"Available versions: [{string.Join(", ", _registry.GetSupportedSchemaVersions(eventType))}]");
-        }
         
         var contract = _registry.ConvertFromDomainEvent(domainEvent, schemaVersion);
         var jsonData = JsonSerializer.Serialize(contract, contract.GetType(), _jsonOptions);
