@@ -1,15 +1,11 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Logging;
+using PostTradeSystem.Core.Schemas;
+using PostTradeSystem.Core.Services;
 using PostTradeSystem.Infrastructure.Data;
 using PostTradeSystem.Infrastructure.Repositories;
-using PostTradeSystem.Infrastructure.Schemas;
 using PostTradeSystem.Infrastructure.Services;
-using PostTradeSystem.Core.Services;
-using PostTradeSystem.Core.Schemas;
-using PostTradeSystem.Core.Serialization;
-using PostTradeSystem.Infrastructure.Kafka;
 
 namespace PostTradeSystem.Infrastructure.Extensions;
 
@@ -39,6 +35,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IOutboxRepository, OutboxRepository>();
         services.AddScoped<IEventStoreRepository, EventStoreRepository>();
         services.AddScoped<IOutboxService, OutboxService>();
+        services.AddScoped<IRetryService, RetryService>();
         
         services.AddHostedService<DatabaseMigrationService>();
         services.AddHostedService<SerializationInitializationService>();

@@ -44,6 +44,7 @@ public class OutboxServiceTests
             _mockOutboxRepository.Object,
             _mockKafkaProducer.Object,
             _realSerializationService,
+            new RetryService(Mock.Of<ILogger<RetryService>>()),
             _mockLogger.Object);
     }
 
@@ -114,17 +115,18 @@ public class OutboxServiceTests
         await _outboxService.ProcessOutboxEventsAsync();
 
         // Assert
-        // Since Kafka connection fails (timeout), the event should be marked as failed, not processed
-        _mockOutboxRepository.Verify(x => x.IncrementRetryCountAsync(1, It.IsAny<CancellationToken>()), Times.Once);
-        _mockOutboxRepository.Verify(x => x.MarkAsFailedAsync(1, It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Once);
+        // Since Kafka connection fails (timeout), the event should be moved to dead letter queue after retry attempts
+        _mockOutboxRepository.Verify(x => x.MoveToDeadLetterAsync(1, 
+            It.Is<string>(reason => reason.Contains("Failed after retry attempts with exponential backoff")), 
+            It.IsAny<CancellationToken>()), Times.Once);
         
-        // Verify the Kafka producer was called
+        // Verify the Kafka producer was called multiple times due to retry attempts (3 retries + 1 initial = 4 total)
         _mockKafkaProducer.Verify(x => x.ProduceAsync(
             "events.trades",
             "partition-key", 
             "{\"tradeId\":\"TRADE-001\"}",
             It.IsAny<Dictionary<string, string>>(),
-            It.IsAny<CancellationToken>()), Times.Once);
+            It.IsAny<CancellationToken>()), Times.Exactly(4));
     }
 }
 

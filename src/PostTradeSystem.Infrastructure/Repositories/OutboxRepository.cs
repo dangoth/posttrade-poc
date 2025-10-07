@@ -118,8 +118,11 @@ public class OutboxRepository : IOutboxRepository
             outboxEvent.IsDeadLettered = false;
             outboxEvent.IsProcessed = false;
             outboxEvent.ProcessedAt = null;
+            outboxEvent.DeadLetteredAt = null;
+            outboxEvent.DeadLetterReason = null;
             outboxEvent.RetryCount = 0;
             outboxEvent.LastRetryAt = null;
+            outboxEvent.ErrorMessage = null;
             
             await _context.SaveChangesAsync(cancellationToken);
         }

@@ -56,10 +56,12 @@ public abstract class IntegrationTestBase : SqlServerTestBase
         
         services.AddScoped<IOutboxRepository, OutboxRepository>();
         services.AddScoped<IEventStoreRepository, EventStoreRepository>();
+        services.AddScoped<IRetryService, RetryService>();
         services.AddScoped<IOutboxService, OutboxService>();
         
         services.AddSingleton(Mock.Of<ILogger<EventStoreRepository>>());
         services.AddSingleton(Mock.Of<ILogger<OutboxService>>());
+        services.AddSingleton(Mock.Of<ILogger<RetryService>>());
         
         var serviceProvider = services.BuildServiceProvider();
         

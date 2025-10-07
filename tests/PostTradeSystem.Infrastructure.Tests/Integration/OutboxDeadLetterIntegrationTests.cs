@@ -31,6 +31,7 @@ public class OutboxDeadLetterIntegrationTests : IntegrationTestBase
             _outboxRepository,
             _mockKafkaProducer.Object,
             SerializationService,
+            new RetryService(Mock.Of<ILogger<RetryService>>()),
             Mock.Of<ILogger<OutboxService>>(),
             _mockTimeProvider);
     }
@@ -60,29 +61,16 @@ public class OutboxDeadLetterIntegrationTests : IntegrationTestBase
         Assert.False(outboxEvent.IsDeadLettered);
         Assert.Equal(0, outboxEvent.RetryCount);
 
-        // Act - Process outbox events (should fail and increment retry count)
+        // Act - Process outbox events (should fail with retries and move to DLQ)
+        // Use minimal delay for fast testing
         await _outboxService.ProcessOutboxEventsAsync();
 
-        // Verify retry count incremented but not dead lettered yet
-        var eventAfterFirstFail = await Context.OutboxEvents.FindAsync(outboxEvent.Id);
-        Assert.NotNull(eventAfterFirstFail);
-        Assert.False(eventAfterFirstFail.IsDeadLettered);
-        Assert.Equal(1, eventAfterFirstFail.RetryCount);
-
-        // Act - Retry failed events multiple times to exceed max retries
-        // Advance time to bypass retry delay and use proper retry logic
-        _mockTimeProvider.AdvanceMinutes(6); // Advance past 5-minute retry delay
-        await _outboxService.RetryFailedEventsAsync(); // Retry count: 2
-        
-        _mockTimeProvider.AdvanceMinutes(6); // Advance past retry delay again
-        await _outboxService.RetryFailedEventsAsync(); // Retry count: 3, should move to DLQ
-
-        // Assert - Event should now be dead lettered
+        // Assert - Event should now be dead lettered after retry attempts
         var deadLetteredEvent = await Context.OutboxEvents.FindAsync(outboxEvent.Id);
         Assert.NotNull(deadLetteredEvent);
         Assert.True(deadLetteredEvent.IsDeadLettered);
         Assert.NotNull(deadLetteredEvent.DeadLetteredAt);
-        Assert.Contains("Exceeded max retry count", deadLetteredEvent.DeadLetterReason);
+        Assert.Contains("Failed after retry attempts with exponential backoff", deadLetteredEvent.DeadLetterReason);
 
         // Verify it appears in dead letter queries
         var deadLetteredEvents = await _outboxService.GetDeadLetteredEventsAsync(100);
@@ -183,15 +171,9 @@ public class OutboxDeadLetterIntegrationTests : IntegrationTestBase
             It.IsAny<CancellationToken>()))
             .ThrowsAsync(new Exception("Kafka failure"));
 
-        // Act - Process and retry until some move to DLQ
-        // Use proper retry logic with time manipulation
-        await _outboxService.ProcessOutboxEventsAsync(); // All fail, retry count = 1
-        
-        _mockTimeProvider.AdvanceMinutes(6); // Advance past retry delay
-        await _outboxService.RetryFailedEventsAsync(); // All fail, retry count = 2
-        
-        _mockTimeProvider.AdvanceMinutes(6); // Advance past retry delay
-        await _outboxService.RetryFailedEventsAsync(); // All fail, retry count = 3, move to DLQ
+        // Act - Process events (should fail with retries and move to DLQ)
+        // With the new RetryService, all retries happen within ProcessOutboxEventsAsync
+        await _outboxService.ProcessOutboxEventsAsync();
 
         // Assert - All should be dead lettered
         var dlqCount = await _outboxService.GetDeadLetteredEventCountAsync();

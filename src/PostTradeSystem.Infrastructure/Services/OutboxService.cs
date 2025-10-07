@@ -14,6 +14,7 @@ public class OutboxService : IOutboxService
     private readonly IOutboxRepository _outboxRepository;
     private readonly IKafkaProducerService _kafkaProducer;
     private readonly ISerializationManagementService _serializationService;
+    private readonly IRetryService _retryService;
     private readonly ILogger<OutboxService> _logger;
     private readonly ITimeProvider _timeProvider;
 
@@ -21,12 +22,14 @@ public class OutboxService : IOutboxService
         IOutboxRepository outboxRepository,
         IKafkaProducerService kafkaProducer,
         ISerializationManagementService serializationService,
+        IRetryService retryService,
         ILogger<OutboxService> logger,
         ITimeProvider? timeProvider = null)
     {
         _outboxRepository = outboxRepository;
         _kafkaProducer = kafkaProducer;
         _serializationService = serializationService;
+        _retryService = retryService;
         _logger = logger;
         _timeProvider = timeProvider ?? new SystemTimeProvider();
     }
@@ -77,7 +80,11 @@ public class OutboxService : IOutboxService
             {
                 try
                 {
-                    await PublishEventAsync(outboxEvent, cancellationToken);
+                    await _retryService.ExecuteWithRetryAsync(async () =>
+                    {
+                        await PublishEventAsync(outboxEvent, cancellationToken);
+                    }, maxRetries: 3, baseDelay: TimeSpan.FromMilliseconds(1), cancellationToken);
+                    
                     await _outboxRepository.MarkAsProcessedAsync(outboxEvent.Id, cancellationToken);
                     
                     _logger.LogDebug("Successfully published outbox event {EventId} to topic {Topic}", 
@@ -85,26 +92,14 @@ public class OutboxService : IOutboxService
                 }
                 catch (Exception ex)
                 {
-                    _logger.LogError(ex, "Failed to publish outbox event {EventId} to topic {Topic}", 
+                    _logger.LogError(ex, "Failed to publish outbox event {EventId} to topic {Topic} after retries", 
                         outboxEvent.EventId, outboxEvent.Topic);
                     
-                    await _outboxRepository.IncrementRetryCountAsync(outboxEvent.Id, cancellationToken);
+                    var deadLetterReason = $"Failed after retry attempts with exponential backoff. Last error: {ex.Message}";
+                    await _outboxRepository.MoveToDeadLetterAsync(outboxEvent.Id, deadLetterReason, cancellationToken);
                     
-                    // Check if we've exceeded max retry count and should move to dead letter
-                    var maxRetryCount = 3;
-                    var newRetryCount = outboxEvent.RetryCount + 1;
-                    if (newRetryCount >= maxRetryCount)
-                    {
-                        var deadLetterReason = $"Exceeded max retry count ({maxRetryCount}). Last error: {ex.Message}";
-                        await _outboxRepository.MoveToDeadLetterAsync(outboxEvent.Id, deadLetterReason, cancellationToken);
-                        
-                        _logger.LogError("Event {EventId} moved to dead letter queue after {RetryCount} failed attempts. Reason: {Reason}", 
-                            outboxEvent.EventId, newRetryCount, deadLetterReason);
-                    }
-                    else
-                    {
-                        await _outboxRepository.MarkAsFailedAsync(outboxEvent.Id, ex.Message, cancellationToken);
-                    }
+                    _logger.LogError("Event {EventId} moved to dead letter queue after retry attempts. Reason: {Reason}", 
+                        outboxEvent.EventId, deadLetterReason);
                 }
             }
         }

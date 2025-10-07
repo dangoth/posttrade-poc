@@ -40,6 +40,7 @@ public class OutboxServiceDlqTests
             _mockRepository.Object,
             _mockKafkaProducer.Object,
             _serializationService,
+            new RetryService(Mock.Of<ILogger<RetryService>>()),
             _mockLogger.Object);
     }
 

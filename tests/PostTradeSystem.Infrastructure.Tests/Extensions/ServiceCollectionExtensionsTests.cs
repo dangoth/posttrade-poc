@@ -5,6 +5,7 @@ using PostTradeSystem.Core.Aggregates;
 using PostTradeSystem.Infrastructure.Data;
 using PostTradeSystem.Infrastructure.Extensions;
 using PostTradeSystem.Infrastructure.Repositories;
+using PostTradeSystem.Infrastructure.Services;
 using PostTradeSystem.Infrastructure.Serialization;
 using PostTradeSystem.Infrastructure.Tests.Integration;
 using PostTradeSystem.Infrastructure.Tests.TestBase;
@@ -37,6 +38,7 @@ public class ServiceCollectionExtensionsTests : IntegrationTestBase
         services.Should().Contain(s => s.ServiceType == typeof(PostTradeDbContext));
         services.Should().Contain(s => s.ServiceType == typeof(IEventStoreRepository));
         services.Should().Contain(s => s.ServiceType == typeof(IAggregateRepository<>));
+        services.Should().Contain(s => s.ServiceType == typeof(IRetryService));
         services.Should().Contain(s => s.ServiceType == typeof(PostTradeSystem.Core.Serialization.IEventSerializer));
         services.Should().Contain(s => s.ServiceType == typeof(PostTradeSystem.Core.Serialization.EventSerializationRegistry));
         services.Should().Contain(s => s.ServiceType == typeof(PostTradeSystem.Core.Serialization.ISerializationManagementService));
