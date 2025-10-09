@@ -1,6 +1,7 @@
 using PostTradeSystem.Core.Events;
 using PostTradeSystem.Core.Schemas;
 using PostTradeSystem.Core.Serialization.Contracts;
+using PostTradeSystem.Core.Common;
 
 namespace PostTradeSystem.Core.Serialization;
 
@@ -8,8 +9,8 @@ public interface ISerializationManagementService
 {
     Task InitializeAsync();
     
-    Task<SerializedEvent> SerializeAsync(IDomainEvent domainEvent, int? targetSchemaVersion = null);
-    IDomainEvent Deserialize(SerializedEvent serializedEvent);
+    Task<Result<SerializedEvent>> SerializeAsync(IDomainEvent domainEvent, int? targetSchemaVersion = null);
+    Result<IDomainEvent> Deserialize(SerializedEvent serializedEvent);
     
     ValidationResult ValidateEventData(string eventType, string jsonData, int schemaVersion);
     ValidationResult ValidateEvent(IDomainEvent domainEvent, int? targetVersion = null);

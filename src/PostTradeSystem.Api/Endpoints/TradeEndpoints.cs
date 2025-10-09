@@ -8,31 +8,27 @@ public static class TradeEndpoints
     public static void MapTradeEndpoints(this WebApplication app)
     {
         app.MapPost("/trades/equity", async (EquityTradeMessage trade, TradeService tradeService) =>
-            await HandleTradeEndpoint(() => tradeService.ProduceEquityTradeAsync(trade)))
+        {
+            var result = await tradeService.ProduceEquityTradeAsync(trade);
+            return result.IsSuccess ? Results.Ok(result.Value) : Results.BadRequest(new { Success = false, Error = result.Error });
+        })
         .WithName("ProduceEquityTrade")
         .WithOpenApi();
 
         app.MapPost("/trades/option", async (OptionTradeMessage trade, TradeService tradeService) =>
-            await HandleTradeEndpoint(() => tradeService.ProduceOptionTradeAsync(trade)))
+        {
+            var result = await tradeService.ProduceOptionTradeAsync(trade);
+            return result.IsSuccess ? Results.Ok(result.Value) : Results.BadRequest(new { Success = false, Error = result.Error });
+        })
         .WithName("ProduceOptionTrade")
         .WithOpenApi();
 
         app.MapPost("/trades/fx", async (FxTradeMessage trade, TradeService tradeService) =>
-            await HandleTradeEndpoint(() => tradeService.ProduceFxTradeAsync(trade)))
+        {
+            var result = await tradeService.ProduceFxTradeAsync(trade);
+            return result.IsSuccess ? Results.Ok(result.Value) : Results.BadRequest(new { Success = false, Error = result.Error });
+        })
         .WithName("ProduceFxTrade")
         .WithOpenApi();
-    }
-
-    private static async Task<IResult> HandleTradeEndpoint(Func<Task<object>> tradeOperation)
-    {
-        try
-        {
-            var result = await tradeOperation();
-            return Results.Ok(result);
-        }
-        catch (Exception ex)
-        {
-            return Results.BadRequest(new { Success = false, Error = ex.Message });
-        }
     }
 }

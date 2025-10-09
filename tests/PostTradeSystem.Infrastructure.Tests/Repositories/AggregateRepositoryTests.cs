@@ -8,6 +8,7 @@ using PostTradeSystem.Infrastructure.Tests.TestBase;
 using PostTradeSystem.Infrastructure.Tests.TestHelpers;
 using FluentAssertions;
 using Xunit;
+using PostTradeSystem.Core.Common;
 
 namespace PostTradeSystem.Infrastructure.Tests.Repositories;
 
@@ -30,11 +31,12 @@ public class AggregateRepositoryTests : IntegrationTestBase
         var aggregateId = Guid.NewGuid().ToString();
         
         _mockEventStore.Setup(es => es.GetEventsAsync(aggregateId, 0, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new List<IDomainEvent>());
+            .ReturnsAsync(Result<IEnumerable<IDomainEvent>>.Success(new List<IDomainEvent>()));
 
         var result = await _repository.GetByIdAsync(aggregateId);
 
-        result.Should().BeNull();
+        result.IsSuccess.Should().BeTrue();
+        result.Value.Should().BeNull();
     }
 
     [Fact]
@@ -54,7 +56,7 @@ public class AggregateRepositoryTests : IntegrationTestBase
         var expectedAggregate = TradeAggregate.FromHistory(aggregateId, partitionKey, events);
 
         _mockEventStore.Setup(es => es.GetEventsAsync(aggregateId, 0, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(events);
+            .ReturnsAsync(Result<IEnumerable<IDomainEvent>>.Success(events));
 
         _mockFactory.Setup(f => f(aggregateId, It.IsAny<string>(), events))
             .Returns(expectedAggregate);
@@ -62,8 +64,8 @@ public class AggregateRepositoryTests : IntegrationTestBase
         var result = await _repository.GetByIdAsync(aggregateId);
 
         result.Should().NotBeNull();
-        result!.Id.Should().Be(aggregateId);
-        result.PartitionKey.Should().Be(partitionKey);
+        result!.Value!.Id.Should().Be(aggregateId);
+        result.Value.PartitionKey.Should().Be(partitionKey);
         _mockFactory.Verify(f => f(aggregateId, It.IsAny<string>(), events), Times.Once);
     }
 
@@ -109,8 +111,17 @@ public class AggregateRepositoryTests : IntegrationTestBase
             "TestSystem"
         );
 
-        await _repository.SaveAsync(aggregate);
+        _mockEventStore.Setup(es => es.SaveEventsAsync(
+            It.IsAny<string>(),
+            It.IsAny<string>(),
+            It.IsAny<IEnumerable<IDomainEvent>>(),
+            It.IsAny<long>(),
+            It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Result.Success());
 
+        var result = await _repository.SaveAsync(aggregate);
+
+        result.IsSuccess.Should().BeTrue();
         _mockEventStore.Verify(es => es.SaveEventsAsync(
             aggregateId,
             aggregate.PartitionKey,
@@ -145,7 +156,7 @@ public class AggregateRepositoryTests : IntegrationTestBase
         );
 
         _mockEventStore.Setup(es => es.CheckIdempotencyAsync(idempotencyKey, requestHash, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(true);
+            .ReturnsAsync(Result<bool>.Success(true));
 
         await _repository.SaveAsync(aggregate, idempotencyKey, requestHash);
 
@@ -155,6 +166,15 @@ public class AggregateRepositoryTests : IntegrationTestBase
             It.IsAny<IEnumerable<IDomainEvent>>(), 
             It.IsAny<long>(), 
             It.IsAny<CancellationToken>()), Times.Never);
+
+        _mockEventStore.Setup(es => es.SaveIdempotencyAsync(
+            It.IsAny<string>(), 
+            It.IsAny<string>(), 
+            It.IsAny<string>(), 
+            It.IsAny<string>(), 
+            It.IsAny<TimeSpan>(), 
+            It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Result.Success());
 
         _mockEventStore.Verify(es => es.SaveIdempotencyAsync(
             It.IsAny<string>(), 
@@ -189,7 +209,13 @@ public class AggregateRepositoryTests : IntegrationTestBase
         );
 
         _mockEventStore.Setup(es => es.CheckIdempotencyAsync(idempotencyKey, requestHash, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(false);
+            .ReturnsAsync(Result<bool>.Success(false));
+        
+        _mockEventStore.Setup(es => es.SaveEventsAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<IEnumerable<IDomainEvent>>(), It.IsAny<long>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Result.Success());
+            
+        _mockEventStore.Setup(es => es.SaveIdempotencyAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<TimeSpan>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Result.Success());
 
         await _repository.SaveAsync(aggregate, idempotencyKey, requestHash);
 

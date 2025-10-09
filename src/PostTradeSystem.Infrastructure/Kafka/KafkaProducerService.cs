@@ -3,6 +3,9 @@ using PostTradeSystem.Core.Messages;
 using PostTradeSystem.Core.Serialization;
 using System.Text.Json;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Options;
+using PostTradeSystem.Infrastructure.Configuration;
+using PostTradeSystem.Core.Common;
 
 namespace PostTradeSystem.Infrastructure.Kafka;
 
@@ -11,9 +14,12 @@ public class KafkaProducerService : IKafkaProducerService
     private readonly IProducer<string, string> _producer;
     private readonly ISerializationManagementService _serializationService;
     private readonly JsonSerializerOptions _jsonOptions;
+    private readonly KafkaExactlyOnceConfiguration _exactlyOnceConfig;
 
-    public KafkaProducerService(IConfiguration configuration, ISerializationManagementService serializationService)
+    public KafkaProducerService(IConfiguration configuration, ISerializationManagementService serializationService, IOptions<KafkaExactlyOnceConfiguration> exactlyOnceOptions)
     {
+        _exactlyOnceConfig = exactlyOnceOptions.Value;
+        
         var kafkaBootstrapServers = configuration.GetSection("Kafka:BootstrapServers").Value ?? 
                                    configuration.GetConnectionString("Kafka") ?? 
                                    "localhost:9092";
@@ -21,15 +27,28 @@ public class KafkaProducerService : IKafkaProducerService
         var config = new ProducerConfig
         {
             BootstrapServers = kafkaBootstrapServers,
-            EnableIdempotence = true,
+            EnableIdempotence = _exactlyOnceConfig.EnableIdempotentProducer,
             Acks = Acks.All,
             MessageTimeoutMs = 30000,
             RequestTimeoutMs = 30000,
             RetryBackoffMs = 1000,
-            MessageSendMaxRetries = 3
+            MessageSendMaxRetries = 3,
+            MaxInFlight = _exactlyOnceConfig.ProducerMaxInFlight
         };
 
+        if (_exactlyOnceConfig.EnableExactlyOnceSemantics)
+        {
+            config.TransactionalId = $"posttrade-producer-{Environment.MachineName}-{Guid.NewGuid():N}";
+            config.TransactionTimeoutMs = _exactlyOnceConfig.TransactionTimeoutMs;
+        }
+
         _producer = new ProducerBuilder<string, string>(config).Build();
+        
+        if (_exactlyOnceConfig.EnableExactlyOnceSemantics)
+        {
+            _producer.InitTransactions(TimeSpan.FromSeconds(30));
+        }
+        
         _serializationService = serializationService;
         _jsonOptions = new JsonSerializerOptions
         {
@@ -38,7 +57,7 @@ public class KafkaProducerService : IKafkaProducerService
         };
     }
 
-    public async Task<DeliveryResult<string, string>> ProduceAsync<T>(string topic, T message) where T : TradeMessage
+    public async Task<Result<DeliveryResult<string, string>>> ProduceAsync<T>(string topic, T message) where T : TradeMessage
     {
         var envelope = new TradeMessageEnvelope<T>
         {
@@ -70,10 +89,37 @@ public class KafkaProducerService : IKafkaProducerService
             }
         };
 
-        return await _producer.ProduceAsync(topic, kafkaMessage);
+        // Use transaction for exactly-once semantics if enabled
+        try
+        {
+            if (_exactlyOnceConfig.EnableExactlyOnceSemantics)
+            {
+                _producer.BeginTransaction();
+                try
+                {
+                    var result = await _producer.ProduceAsync(topic, kafkaMessage);
+                    _producer.CommitTransaction();
+                    return Result<DeliveryResult<string, string>>.Success(result);
+                }
+                catch (Exception ex)
+                {
+                    _producer.AbortTransaction();
+                    return Result<DeliveryResult<string, string>>.Failure($"Transaction failed: {ex.Message}");
+                }
+            }
+            else
+            {
+                var result = await _producer.ProduceAsync(topic, kafkaMessage);
+                return Result<DeliveryResult<string, string>>.Success(result);
+            }
+        }
+        catch (Exception ex)
+        {
+            return Result<DeliveryResult<string, string>>.Failure($"Producer failed: {ex.Message}");
+        }
     }
 
-    public async Task<DeliveryResult<string, string>> ProduceAsync(
+    public async Task<Result<DeliveryResult<string, string>>> ProduceAsync(
         string topic, 
         string key, 
         string value, 
@@ -95,7 +141,34 @@ public class KafkaProducerService : IKafkaProducerService
             }
         }
 
-        return await _producer.ProduceAsync(topic, kafkaMessage, cancellationToken);
+        // Use transaction for exactly-once semantics if enabled
+        try
+        {
+            if (_exactlyOnceConfig.EnableExactlyOnceSemantics)
+            {
+                _producer.BeginTransaction();
+                try
+                {
+                    var result = await _producer.ProduceAsync(topic, kafkaMessage, cancellationToken);
+                    _producer.CommitTransaction();
+                    return Result<DeliveryResult<string, string>>.Success(result);
+                }
+                catch (Exception ex)
+                {
+                    _producer.AbortTransaction();
+                    return Result<DeliveryResult<string, string>>.Failure($"Transaction failed: {ex.Message}");
+                }
+            }
+            else
+            {
+                var result = await _producer.ProduceAsync(topic, kafkaMessage, cancellationToken);
+                return Result<DeliveryResult<string, string>>.Success(result);
+            }
+        }
+        catch (Exception ex)
+        {
+            return Result<DeliveryResult<string, string>>.Failure($"Producer failed: {ex.Message}");
+        }
     }
 
     public void Dispose()

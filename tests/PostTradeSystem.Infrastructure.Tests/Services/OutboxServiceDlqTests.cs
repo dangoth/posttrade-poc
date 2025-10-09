@@ -1,5 +1,8 @@
+using Confluent.Kafka;
 using Microsoft.Extensions.Logging;
 using Moq;
+using PostTradeSystem.Core.Common;
+using PostTradeSystem.Core.Events;
 using PostTradeSystem.Core.Schemas;
 using PostTradeSystem.Core.Serialization;
 using PostTradeSystem.Core.Services;
@@ -15,7 +18,7 @@ public class OutboxServiceDlqTests
 {
     private readonly Mock<IOutboxRepository> _mockRepository;
     private readonly Mock<IKafkaProducerService> _mockKafkaProducer;
-    private readonly SerializationManagementService _serializationService;
+    private readonly ISerializationManagementService _serializationService;
     private readonly Mock<ILogger<OutboxService>> _mockLogger;
     private readonly OutboxService _outboxService;
 
@@ -23,17 +26,12 @@ public class OutboxServiceDlqTests
     {
         _mockRepository = new Mock<IOutboxRepository>();
         _mockKafkaProducer = new Mock<IKafkaProducerService>();
-        // Create real instances instead of mocks for concrete classes
-        var registry = new EventSerializationRegistry();
-        var mockSchemaRegistry = new Mock<ISchemaRegistry>();
-        var validator = new JsonSchemaValidator();
-        var mockTradeRiskService = new Mock<ITradeRiskService>();
+        // Create mock serialization service that returns Results
+        var mockSerializationService = new Mock<ISerializationManagementService>();
+        mockSerializationService.Setup(x => x.SerializeAsync(It.IsAny<IDomainEvent>(), It.IsAny<int?>()))
+            .ReturnsAsync(Result<SerializedEvent>.Success(new SerializedEvent("TradeCreated", 1, "{}", "schema1", DateTime.UtcNow, new Dictionary<string, string>())));
         
-        _serializationService = new SerializationManagementService(
-            registry,
-            mockSchemaRegistry.Object, 
-            validator,
-            mockTradeRiskService.Object);
+        _serializationService = mockSerializationService.Object;
         _mockLogger = new Mock<ILogger<OutboxService>>();
 
         _outboxService = new OutboxService(
@@ -65,15 +63,20 @@ public class OutboxServiceDlqTests
         };
 
         _mockRepository.Setup(r => r.GetFailedEventsForRetryAsync(It.IsAny<TimeSpan>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new[] { failedEvent });
+            .ReturnsAsync(Result<IEnumerable<OutboxEventEntity>>.Success(new[] { failedEvent }));
+        _mockRepository.Setup(r => r.IncrementRetryCountAsync(It.IsAny<long>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Result.Success());
+        _mockRepository.Setup(r => r.MoveToDeadLetterAsync(It.IsAny<long>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Result.Success());
 
         _mockKafkaProducer.Setup(p => p.ProduceAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<Dictionary<string, string>>(), It.IsAny<CancellationToken>()))
-            .ThrowsAsync(new Exception("Kafka connection failed"));
+            .ReturnsAsync(Result<DeliveryResult<string, string>>.Failure("Kafka connection failed"));
 
         // Act
-        await _outboxService.RetryFailedEventsAsync();
+        var result = await _outboxService.RetryFailedEventsAsync();
 
         // Assert
+        Assert.True(result.IsSuccess);
         _mockRepository.Verify(r => r.IncrementRetryCountAsync(failedEvent.Id, It.IsAny<CancellationToken>()), Times.Once);
         _mockRepository.Verify(r => r.MoveToDeadLetterAsync(failedEvent.Id, It.Is<string>(reason => reason.Contains("Exceeded max retry count")), It.IsAny<CancellationToken>()), Times.Once);
         _mockRepository.Verify(r => r.MarkAsFailedAsync(It.IsAny<long>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
@@ -100,15 +103,20 @@ public class OutboxServiceDlqTests
         };
 
         _mockRepository.Setup(r => r.GetFailedEventsForRetryAsync(It.IsAny<TimeSpan>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new[] { failedEvent });
+            .ReturnsAsync(Result<IEnumerable<OutboxEventEntity>>.Success(new[] { failedEvent }));
+        _mockRepository.Setup(r => r.IncrementRetryCountAsync(It.IsAny<long>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Result.Success());
+        _mockRepository.Setup(r => r.MarkAsFailedAsync(It.IsAny<long>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Result.Success());
 
         _mockKafkaProducer.Setup(p => p.ProduceAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<Dictionary<string, string>>(), It.IsAny<CancellationToken>()))
-            .ThrowsAsync(new Exception("Kafka connection failed"));
+            .ReturnsAsync(Result<DeliveryResult<string, string>>.Failure("Kafka connection failed"));
 
         // Act
-        await _outboxService.RetryFailedEventsAsync();
+        var result = await _outboxService.RetryFailedEventsAsync();
 
         // Assert
+        Assert.True(result.IsSuccess);
         _mockRepository.Verify(r => r.IncrementRetryCountAsync(failedEvent.Id, It.IsAny<CancellationToken>()), Times.Once);
         _mockRepository.Verify(r => r.MoveToDeadLetterAsync(It.IsAny<long>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
         _mockRepository.Verify(r => r.MarkAsFailedAsync(failedEvent.Id, "Kafka connection failed", It.IsAny<CancellationToken>()), Times.Once);
@@ -125,15 +133,17 @@ public class OutboxServiceDlqTests
         };
 
         _mockRepository.Setup(r => r.GetDeadLetteredEventsAsync(100, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(deadLetteredEvents);
+            .ReturnsAsync(Result<IEnumerable<OutboxEventEntity>>.Success(deadLetteredEvents));
 
         // Act
         var result = await _outboxService.GetDeadLetteredEventsAsync(100);
 
         // Assert
-        Assert.Equal(2, result.Count());
-        Assert.Equal("event1", result.First().EventId);
-        Assert.Equal("event2", result.Last().EventId);
+        Assert.True(result.IsSuccess);
+        Assert.NotNull(result.Value);
+        Assert.Equal(2, result.Value.Count());
+        Assert.Equal("event1", result.Value.First().EventId);
+        Assert.Equal("event2", result.Value.Last().EventId);
     }
 
     [Fact]
@@ -142,10 +152,15 @@ public class OutboxServiceDlqTests
         // Arrange
         var eventId = 123L;
 
+        // Setup
+        _mockRepository.Setup(r => r.ReprocessDeadLetteredEventAsync(It.IsAny<long>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Result.Success());
+
         // Act
-        await _outboxService.ReprocessDeadLetteredEventAsync(eventId);
+        var result = await _outboxService.ReprocessDeadLetteredEventAsync(eventId);
 
         // Assert
+        Assert.True(result.IsSuccess);
         _mockRepository.Verify(r => r.ReprocessDeadLetteredEventAsync(eventId, It.IsAny<CancellationToken>()), Times.Once);
     }
 
@@ -154,13 +169,14 @@ public class OutboxServiceDlqTests
     {
         // Arrange
         _mockRepository.Setup(r => r.GetDeadLetteredEventCountAsync(It.IsAny<CancellationToken>()))
-            .ReturnsAsync(5);
+            .ReturnsAsync(Result<int>.Success(5));
 
         // Act
-        var count = await _outboxService.GetDeadLetteredEventCountAsync();
+        var result = await _outboxService.GetDeadLetteredEventCountAsync();
 
         // Assert
-        Assert.Equal(5, count);
+        Assert.True(result.IsSuccess);
+        Assert.Equal(5, result.Value);
     }
 
     [Fact]
@@ -169,21 +185,24 @@ public class OutboxServiceDlqTests
         // Arrange
         var exception = new Exception("Database error");
         _mockRepository.Setup(r => r.GetDeadLetteredEventsAsync(It.IsAny<int>(), It.IsAny<CancellationToken>()))
-            .ThrowsAsync(exception);
+            .ReturnsAsync(Result<IEnumerable<OutboxEventEntity>>.Failure("Database error"));
 
-        // Act & Assert
-        var thrownException = await Assert.ThrowsAsync<Exception>(() => _outboxService.GetDeadLetteredEventsAsync(100));
-        Assert.Equal("Database error", thrownException.Message);
+        // Act
+        var result = await _outboxService.GetDeadLetteredEventsAsync(100);
 
-        // Verify error was logged
+        // Assert
+        Assert.True(result.IsFailure);
+        Assert.Contains("Database error", result.Error);
+
+        // Verify error was NOT logged (since repository returned failure Result, not exception)
         _mockLogger.Verify(
             x => x.Log(
                 LogLevel.Error,
                 It.IsAny<EventId>(),
-                It.Is<It.IsAnyType>((v, t) => v.ToString()!.Contains("Error retrieving dead lettered events")),
-                exception,
+                It.IsAny<It.IsAnyType>(),
+                It.IsAny<Exception>(),
                 It.IsAny<Func<It.IsAnyType, Exception?, string>>()),
-            Times.Once);
+            Times.Never);
     }
 
     [Fact]
@@ -193,20 +212,23 @@ public class OutboxServiceDlqTests
         var eventId = 123L;
         var exception = new Exception("Database error");
         _mockRepository.Setup(r => r.ReprocessDeadLetteredEventAsync(eventId, It.IsAny<CancellationToken>()))
-            .ThrowsAsync(exception);
+            .ReturnsAsync(Result.Failure("Database error"));
 
-        // Act & Assert
-        var thrownException = await Assert.ThrowsAsync<Exception>(() => _outboxService.ReprocessDeadLetteredEventAsync(eventId));
-        Assert.Equal("Database error", thrownException.Message);
+        // Act
+        var result = await _outboxService.ReprocessDeadLetteredEventAsync(eventId);
 
-        // Verify error was logged
+        // Assert
+        Assert.True(result.IsFailure);
+        Assert.Contains("Database error", result.Error);
+
+        // Verify error was NOT logged (since repository returned failure Result, not exception)
         _mockLogger.Verify(
             x => x.Log(
                 LogLevel.Error,
                 It.IsAny<EventId>(),
-                It.Is<It.IsAnyType>((v, t) => v.ToString()!.Contains($"Error reprocessing dead lettered event {eventId}")),
-                exception,
+                It.IsAny<It.IsAnyType>(),
+                It.IsAny<Exception>(),
                 It.IsAny<Func<It.IsAnyType, Exception?, string>>()),
-            Times.Once);
+            Times.Never);
     }
 }

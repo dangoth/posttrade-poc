@@ -10,7 +10,9 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Options;
 using PostTradeSystem.Infrastructure.Health;
+using PostTradeSystem.Infrastructure.Configuration;
 
 namespace PostTradeSystem.Infrastructure.Kafka;
 
@@ -23,18 +25,21 @@ public class KafkaConsumerService : BackgroundService
     private readonly ILogger<KafkaConsumerService> _logger;
     private readonly JsonSerializerOptions _jsonOptions;
     private readonly string[] _topics;
+    private readonly KafkaExactlyOnceConfiguration _exactlyOnceConfig;
 
     public KafkaConsumerService(
         IConfiguration configuration, 
         IServiceScopeFactory serviceScopeFactory,
         KafkaHealthService healthService,
         JsonSchemaValidator schemaValidator,
-        ILogger<KafkaConsumerService> logger)
+        ILogger<KafkaConsumerService> logger,
+        IOptions<KafkaExactlyOnceConfiguration> exactlyOnceOptions)
     {
         _logger = logger;
         _healthService = healthService;
         _serviceScopeFactory = serviceScopeFactory;
         _schemaValidator = schemaValidator;
+        _exactlyOnceConfig = exactlyOnceOptions.Value;
         
         var kafkaBootstrapServers = configuration.GetSection("Kafka:BootstrapServers").Value ?? 
                                    configuration.GetConnectionString("Kafka") ?? 
@@ -43,14 +48,20 @@ public class KafkaConsumerService : BackgroundService
         var config = new ConsumerConfig
         {
             BootstrapServers = kafkaBootstrapServers,
-            GroupId = "posttrade-consumer-group",
+            GroupId = _exactlyOnceConfig.ConsumerGroupId,
             AutoOffsetReset = AutoOffsetReset.Earliest,
             EnableAutoCommit = false,
             EnablePartitionEof = false,
-            SessionTimeoutMs = 30000,
-            HeartbeatIntervalMs = 10000,
-            MaxPollIntervalMs = 300000
+            SessionTimeoutMs = _exactlyOnceConfig.ConsumerSessionTimeoutMs,
+            HeartbeatIntervalMs = _exactlyOnceConfig.ConsumerHeartbeatIntervalMs,
+            MaxPollIntervalMs = _exactlyOnceConfig.ConsumerMaxPollIntervalMs
         };
+
+        if (_exactlyOnceConfig.EnableExactlyOnceSemantics)
+        {
+            config.IsolationLevel = IsolationLevel.ReadCommitted;
+            config.EnableAutoOffsetStore = !_exactlyOnceConfig.EnableManualOffsetManagement;
+        }
 
         _consumer = new ConsumerBuilder<string, string>(config)
             .SetErrorHandler((_, e) => logger.LogError("Kafka consumer error: {Error}", e.Reason))
@@ -58,11 +69,38 @@ public class KafkaConsumerService : BackgroundService
             {
                 logger.LogInformation("Assigned partitions: [{Partitions}]", 
                     string.Join(", ", partitions.Select(p => $"{p.Topic}:{p.Partition}")));
+                
+                foreach (var partition in partitions)
+                {
+                    logger.LogDebug("Consumer group rebalance: Assigned partition {Topic}:{Partition}", 
+                        partition.Topic, partition.Partition);
+                }
+                
+                _healthService.SetHealthy($"Consumer assigned {partitions.Count} partitions");
             })
             .SetPartitionsRevokedHandler((c, partitions) =>
             {
                 logger.LogInformation("Revoked partitions: [{Partitions}]", 
                     string.Join(", ", partitions.Select(p => $"{p.Topic}:{p.Partition}")));
+                
+                try
+                {
+                    c.Commit(partitions);
+                    logger.LogDebug("Successfully committed offsets before partition revocation");
+                }
+                catch (Exception ex)
+                {
+                    logger.LogWarning(ex, "Failed to commit offsets during partition revocation");
+                }
+                
+                _healthService.SetDegraded($"Consumer lost {partitions.Count} partitions during rebalance");
+            })
+            .SetPartitionsLostHandler((c, partitions) =>
+            {
+                logger.LogWarning("Lost partitions: [{Partitions}]", 
+                    string.Join(", ", partitions.Select(p => $"{p.Topic}:{p.Partition}")));
+                
+                _healthService.SetDegraded($"Consumer lost {partitions.Count} partitions unexpectedly");
             })
             .Build();
 
@@ -139,8 +177,15 @@ public class KafkaConsumerService : BackgroundService
                 
                 if (consumeResult?.Message != null)
                 {
-                    await ProcessMessageAsync(consumeResult);
-                    _consumer.Commit(consumeResult);
+                    var success = await ProcessMessageAsync(consumeResult);
+                    if (success)
+                    {
+                        if (_exactlyOnceConfig.EnableExactlyOnceSemantics && _exactlyOnceConfig.EnableManualOffsetManagement)
+                        {
+                            _consumer.StoreOffset(consumeResult);
+                        }
+                        _consumer.Commit(consumeResult);
+                    }
                 }
             }
             catch (ConsumeException ex)
@@ -166,7 +211,7 @@ public class KafkaConsumerService : BackgroundService
         }
     }
 
-    private async Task ProcessMessageAsync(ConsumeResult<string, string> consumeResult)
+    private async Task<bool> ProcessMessageAsync(ConsumeResult<string, string> consumeResult)
     {
         var message = consumeResult.Message;
         var messageTypeHeader = message.Headers?.FirstOrDefault(h => h.Key == "messageType");
@@ -175,7 +220,7 @@ public class KafkaConsumerService : BackgroundService
         {
             _logger.LogWarning("Message without messageType header received from {Topic}:{Partition}:{Offset}", 
                 consumeResult.Topic, consumeResult.Partition, consumeResult.Offset);
-            return;
+            return false;
         }
 
         var messageType = System.Text.Encoding.UTF8.GetString(messageTypeHeader.GetValueBytes());
@@ -192,7 +237,7 @@ public class KafkaConsumerService : BackgroundService
                 _logger.LogError("Schema validation failed for {MessageType} from {Topic}:{Partition}:{Offset}. Error: {Error}", 
                     messageType, consumeResult.Topic, consumeResult.Partition, consumeResult.Offset, 
                     schemaValidationResult.ErrorMessage);
-                return;
+                return false;
             }
 
             var messageKey = $"{consumeResult.Topic}:{consumeResult.Partition}:{consumeResult.Offset}";
@@ -201,10 +246,23 @@ public class KafkaConsumerService : BackgroundService
             using var scope = _serviceScopeFactory.CreateScope();
             var eventStoreRepository = scope.ServiceProvider.GetRequiredService<IEventStoreRepository>();
             
-            if (await eventStoreRepository.CheckIdempotencyAsync(messageKey, requestHash))
+            var idempotencyResult = await eventStoreRepository.CheckIdempotencyAsync(messageKey, requestHash);
+            if (idempotencyResult.IsFailure)
+            {
+                _logger.LogError("Failed to check idempotency for key {MessageKey}: {Error}", messageKey, idempotencyResult.Error);
+                return false;
+            }
+            
+            idempotencyResult = await eventStoreRepository.CheckIdempotencyAsync(messageKey, requestHash);
+            if (idempotencyResult.IsSuccess && idempotencyResult.Value)
             {
                 _logger.LogInformation("Duplicate message detected, skipping: {MessageKey}", messageKey);
-                return;
+                return true;
+            }
+            else if (idempotencyResult.IsFailure)
+            {
+                _logger.LogError("Failed to check idempotency for key {MessageKey}: {Error}", messageKey, idempotencyResult.Error);
+                throw new InvalidOperationException($"Idempotency check failed: {idempotencyResult.Error}");
             }
 
             var (envelope, tradeEvent) = await DeserializeAndCreateEvent(messageType, message.Value, correlationId);
@@ -212,7 +270,7 @@ public class KafkaConsumerService : BackgroundService
             if (envelope == null || tradeEvent == null)
             {
                 _logger.LogError("Failed to create trade event from {MessageType} message", messageType);
-                return;
+                return false;
             }
 
             var partitionKey = CreatePartitionKey(envelope, messageType);
@@ -232,21 +290,26 @@ public class KafkaConsumerService : BackgroundService
             var messageId = GetMessageId(envelope);
             _logger.LogInformation("Successfully processed {MessageType} message {MessageId} from {Topic}:{Partition}:{Offset}", 
                 messageType, messageId, consumeResult.Topic, consumeResult.Partition, consumeResult.Offset);
+            
+            return true;
         }
         catch (JsonException ex)
         {
             _logger.LogError(ex, "Failed to deserialize message from {Topic}:{Partition}:{Offset}", 
                 consumeResult.Topic, consumeResult.Partition, consumeResult.Offset);
+            return false;
         }
         catch (NotSupportedException ex)
         {
             _logger.LogError(ex, "Unsupported message type {MessageType} from {Topic}:{Partition}:{Offset}", 
                 messageType, consumeResult.Topic, consumeResult.Partition, consumeResult.Offset);
+            return false;
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Error processing message from {Topic}:{Partition}:{Offset}", 
                 consumeResult.Topic, consumeResult.Partition, consumeResult.Offset);
+            return false;
         }
     }
 

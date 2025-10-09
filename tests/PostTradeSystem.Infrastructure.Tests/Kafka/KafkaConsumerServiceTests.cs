@@ -193,7 +193,7 @@ public class KafkaConsumerServiceTests : IntegrationTestBase
         var aggregateId = "test-aggregate";
 
         var isDuplicate = await EventStoreRepository.CheckIdempotencyAsync(messageKey, requestHash);
-        isDuplicate.Should().BeFalse();
+        isDuplicate.Value.Should().BeFalse();
 
         await EventStoreRepository.SaveIdempotencyAsync(
             messageKey,
@@ -203,7 +203,7 @@ public class KafkaConsumerServiceTests : IntegrationTestBase
             TimeSpan.FromHours(24));
 
         var isDuplicateAfterSave = await EventStoreRepository.CheckIdempotencyAsync(messageKey, requestHash);
-        isDuplicateAfterSave.Should().BeTrue();
+        isDuplicateAfterSave.Value.Should().BeTrue();
 
         var idempotencyRecord = await Context.IdempotencyKeys
             .FirstOrDefaultAsync(i => i.IdempotencyKey == messageKey);

@@ -1,5 +1,6 @@
 using PostTradeSystem.Core.Aggregates;
 using PostTradeSystem.Core.Events;
+using PostTradeSystem.Core.Common;
 using System.Text.Json;
 
 namespace PostTradeSystem.Infrastructure.Repositories;
@@ -17,61 +18,96 @@ public class AggregateRepository<T> : IAggregateRepository<T> where T : class, I
         _aggregateFactory = aggregateFactory;
     }
 
-    public async Task<T?> GetByIdAsync(string aggregateId, CancellationToken cancellationToken = default)
+    public async Task<Result<T?>> GetByIdAsync(string aggregateId, CancellationToken cancellationToken = default)
     {
-        var events = await _eventStoreRepository.GetEventsAsync(aggregateId, 0, cancellationToken);
-        
-        if (!events.Any())
+        try
         {
-            return null;
-        }
+            var eventsResult = await _eventStoreRepository.GetEventsAsync(aggregateId, 0, cancellationToken);
+            if (eventsResult.IsFailure)
+                return Result<T?>.Failure(eventsResult.Error);
 
-        var firstEvent = events.First();
-        var partitionKey = GeneratePartitionKey(firstEvent);
-        
-        return _aggregateFactory(aggregateId, partitionKey, events);
+            var events = eventsResult.Value!;
+            if (!events.Any())
+            {
+                return Result<T?>.Success(null);
+            }
+
+            var firstEvent = events.First();
+            var partitionKey = GeneratePartitionKey(firstEvent);
+            
+            var aggregate = _aggregateFactory(aggregateId, partitionKey, events);
+            return Result<T?>.Success(aggregate);
+        }
+        catch (Exception ex)
+        {
+            return Result<T?>.Failure($"Failed to get aggregate by ID: {ex.Message}");
+        }
     }
 
-    public async Task SaveAsync(T aggregate, CancellationToken cancellationToken = default)
+    public async Task<Result> SaveAsync(T aggregate, CancellationToken cancellationToken = default)
     {
-        var uncommittedEvents = aggregate.GetUncommittedEvents();
-        
-        if (!uncommittedEvents.Any())
+        try
         {
-            return;
+            var uncommittedEvents = aggregate.GetUncommittedEvents();
+            
+            if (!uncommittedEvents.Any())
+            {
+                return Result.Success();
+            }
+
+            var expectedVersion = uncommittedEvents.First().AggregateVersion - 1;
+            
+            var saveResult = await _eventStoreRepository.SaveEventsAsync(
+                aggregate.Id,
+                aggregate.PartitionKey,
+                uncommittedEvents,
+                expectedVersion,
+                cancellationToken);
+
+            if (saveResult.IsFailure)
+                return saveResult;
+
+            aggregate.MarkEventsAsCommitted();
+            return Result.Success();
         }
-
-        var expectedVersion = uncommittedEvents.First().AggregateVersion - 1;
-        
-        await _eventStoreRepository.SaveEventsAsync(
-            aggregate.Id,
-            aggregate.PartitionKey,
-            uncommittedEvents,
-            expectedVersion,
-            cancellationToken);
-
-        aggregate.MarkEventsAsCommitted();
+        catch (Exception ex)
+        {
+            return Result.Failure($"Failed to save aggregate: {ex.Message}");
+        }
     }
 
-    public async Task SaveAsync(T aggregate, string idempotencyKey, string requestHash, CancellationToken cancellationToken = default)
+    public async Task<Result> SaveAsync(T aggregate, string idempotencyKey, string requestHash, CancellationToken cancellationToken = default)
     {
-        var isIdempotent = await _eventStoreRepository.CheckIdempotencyAsync(idempotencyKey, requestHash, cancellationToken);
-        
-        if (isIdempotent)
+        try
         {
-            return;
+            var idempotencyResult = await _eventStoreRepository.CheckIdempotencyAsync(idempotencyKey, requestHash, cancellationToken);
+            if (idempotencyResult.IsFailure)
+                return Result.Failure(idempotencyResult.Error);
+
+            if (idempotencyResult.Value)
+            {
+                return Result.Success();
+            }
+
+            var saveResult = await SaveAsync(aggregate, cancellationToken);
+            if (saveResult.IsFailure)
+                return saveResult;
+
+            var responseData = JsonSerializer.Serialize(new { AggregateId = aggregate.Id, Success = true });
+            var idempotencySaveResult = await _eventStoreRepository.SaveIdempotencyAsync(
+                idempotencyKey,
+                aggregate.Id,
+                requestHash,
+                responseData,
+                TimeSpan.FromHours(24),
+                cancellationToken);
+
+            return idempotencySaveResult;
         }
-
-        await SaveAsync(aggregate, cancellationToken);
-
-        var responseData = JsonSerializer.Serialize(new { AggregateId = aggregate.Id, Success = true });
-        await _eventStoreRepository.SaveIdempotencyAsync(
-            idempotencyKey,
-            aggregate.Id,
-            requestHash,
-            responseData,
-            TimeSpan.FromHours(24),
-            cancellationToken);
+        catch (Exception ex)
+        {
+            return Result.Failure($"Failed to save aggregate with idempotency: {ex.Message}");
+        }
     }
 
     private static string GeneratePartitionKey(IDomainEvent domainEvent)

@@ -59,10 +59,10 @@ public class EventStoreRepositoryTests : IntegrationTestBase
         var newEvent = DomainEventHelpers.CreateTradeStatusChangedEvent(aggregateId, 2, Guid.NewGuid().ToString(), "TestSystem");
         var newEvents = new List<IDomainEvent> { newEvent };
 
-        var act = async () => await EventStoreRepository.SaveEventsAsync(aggregateId, partitionKey, newEvents, 0);
+        var result = await EventStoreRepository.SaveEventsAsync(aggregateId, partitionKey, newEvents, 0);
         
-        await act.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("*Concurrency conflict*");
+        result.IsSuccess.Should().BeFalse();
+        result.Error.Should().Contain("Concurrency conflict");
     }
 
     [Fact]
@@ -97,10 +97,10 @@ public class EventStoreRepositoryTests : IntegrationTestBase
         await EventStoreRepository.SaveEventsAsync(aggregateId, partitionKey, events, 0);
 
         var retrievedEvents = await EventStoreRepository.GetEventsAsync(aggregateId);
-
-        retrievedEvents.Should().HaveCount(2);
-        retrievedEvents.First().AggregateVersion.Should().Be(1);
-        retrievedEvents.Last().AggregateVersion.Should().Be(2);
+        var retrievedEventsValue = retrievedEvents.Value;
+        retrievedEventsValue.Should().HaveCount(2);
+        retrievedEventsValue!.First().AggregateVersion.Should().Be(1);
+        retrievedEventsValue!.Last().AggregateVersion.Should().Be(2);
     }
 
     [Fact]
@@ -119,7 +119,7 @@ public class EventStoreRepositoryTests : IntegrationTestBase
 
         var result = await EventStoreRepository.CheckIdempotencyAsync(idempotencyKey, requestHash);
 
-        result.Should().BeTrue();
+        result.Value.Should().BeTrue();
     }
 
     [Fact]
@@ -140,7 +140,7 @@ public class EventStoreRepositoryTests : IntegrationTestBase
 
         var result = await EventStoreRepository.CheckIdempotencyAsync(idempotencyKey, requestHash);
 
-        result.Should().BeFalse();
+        result.Value.Should().BeFalse();
     }
 
     [Fact]
@@ -160,7 +160,8 @@ public class EventStoreRepositoryTests : IntegrationTestBase
 
         var result = await EventStoreRepository.GetIdempotentResponseAsync(idempotencyKey, requestHash);
 
-        result.Should().Be(responseData);
+        result.IsSuccess.Should().BeTrue();
+        result.Value.Should().Be(responseData);
     }
 
     [Fact]
@@ -195,7 +196,7 @@ public class EventStoreRepositoryTests : IntegrationTestBase
 
         var unprocessedEvents = await EventStoreRepository.GetUnprocessedEventsAsync();
 
-        unprocessedEvents.Should().HaveCount(1);
+        unprocessedEvents.Value.Should().HaveCount(1);
     }
 
 }

@@ -3,6 +3,7 @@ using PostTradeSystem.Core.Events;
 using PostTradeSystem.Core.Schemas;
 using PostTradeSystem.Core.Services;
 using PostTradeSystem.Core.Serialization.Contracts;
+using PostTradeSystem.Core.Common;
 
 namespace PostTradeSystem.Core.Serialization;
 
@@ -49,14 +50,15 @@ internal class ManagedEventSerializer : IEventSerializer
         _managementService = managementService;
     }
 
-    public Task<SerializedEvent> SerializeAsync<T>(T domainEvent, int? targetSchemaVersion = null) where T : IDomainEvent
+    public Task<Result<SerializedEvent>> SerializeAsync<T>(T domainEvent, int? targetSchemaVersion = null) where T : IDomainEvent
     {
         return _managementService.SerializeAsync(domainEvent, targetSchemaVersion);
     }
 
-    public Task<IDomainEvent> DeserializeAsync(SerializedEvent serializedEvent)
+    public Task<Result<IDomainEvent>> DeserializeAsync(SerializedEvent serializedEvent)
     {
-        return Task.FromResult(_managementService.Deserialize(serializedEvent));
+        var result = _managementService.Deserialize(serializedEvent);
+        return Task.FromResult(result);
     }
 
 }

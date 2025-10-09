@@ -72,19 +72,19 @@ public class EventStoreIntegrationTests : IntegrationTestBase
 
         var retrievedEvents = await EventStoreRepository.GetEventsAsync(aggregateId);
 
-        retrievedEvents.Should().HaveCount(2);
-        retrievedEvents.Should().BeInAscendingOrder(e => e.AggregateVersion);
+        retrievedEvents.Value!.Should().HaveCount(2);
+        retrievedEvents.Value!.Should().BeInAscendingOrder(e => e.AggregateVersion);
 
         var eventsByPartition = await EventStoreRepository.GetEventsByPartitionKeyAsync(partitionKey);
-        eventsByPartition.Should().HaveCount(2);
+        eventsByPartition.Value!.Should().HaveCount(2);
 
         var unprocessedEvents = await EventStoreRepository.GetUnprocessedEventsAsync();
-        unprocessedEvents.Should().HaveCount(2);
+        unprocessedEvents.Value!.Should().HaveCount(2);
 
         await EventStoreRepository.MarkEventsAsProcessedAsync(new[] { event1.EventId });
 
         var remainingUnprocessed = await EventStoreRepository.GetUnprocessedEventsAsync();
-        remainingUnprocessed.Should().HaveCount(1);
+        remainingUnprocessed.Value!.Should().HaveCount(1);
     }
 
     [Fact]
@@ -96,7 +96,7 @@ public class EventStoreIntegrationTests : IntegrationTestBase
         var responseData = "{\"success\": true}";
 
         var isIdempotentBefore = await EventStoreRepository.CheckIdempotencyAsync(idempotencyKey, requestHash);
-        isIdempotentBefore.Should().BeFalse();
+        isIdempotentBefore.Value.Should().BeFalse();
 
         await EventStoreRepository.SaveIdempotencyAsync(
             idempotencyKey, 
@@ -106,13 +106,15 @@ public class EventStoreIntegrationTests : IntegrationTestBase
             TimeSpan.FromHours(1));
 
         var isIdempotentAfter = await EventStoreRepository.CheckIdempotencyAsync(idempotencyKey, requestHash);
-        isIdempotentAfter.Should().BeTrue();
+        isIdempotentAfter.Value.Should().BeTrue();
 
-        var retrievedResponse = await EventStoreRepository.GetIdempotentResponseAsync(idempotencyKey, requestHash);
-        retrievedResponse.Should().Be(responseData);
+        var retrievedResponseResult = await EventStoreRepository.GetIdempotentResponseAsync(idempotencyKey, requestHash);
+        retrievedResponseResult.IsSuccess.Should().BeTrue();
+        retrievedResponseResult.Value.Should().Be(responseData);
 
-        var wrongHashResponse = await EventStoreRepository.GetIdempotentResponseAsync(idempotencyKey, "WRONG_HASH");
-        wrongHashResponse.Should().BeNull();
+        var wrongHashResponseResult = await EventStoreRepository.GetIdempotentResponseAsync(idempotencyKey, "WRONG_HASH");
+        wrongHashResponseResult.IsSuccess.Should().BeTrue();
+        wrongHashResponseResult.Value.Should().BeNull();
     }
 
     [Fact]
@@ -127,10 +129,10 @@ public class EventStoreIntegrationTests : IntegrationTestBase
 
         await EventStoreRepository.SaveEventsAsync(aggregateId, partitionKey, new[] { event1 }, 0);
 
-        var act = async () => await EventStoreRepository.SaveEventsAsync(aggregateId, partitionKey, new[] { event2 }, 0);
+        var result = await EventStoreRepository.SaveEventsAsync(aggregateId, partitionKey, new[] { event2 }, 0);
 
-        await act.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("*Concurrency conflict*");
+        result.IsSuccess.Should().BeFalse();
+        result.Error.Should().Contain("Concurrency conflict");
     }
 
     [Fact]
@@ -193,9 +195,9 @@ public class EventStoreIntegrationTests : IntegrationTestBase
 
         var events = new List<IDomainEvent> { validEvent, duplicateEvent };
 
-        var act = async () => await EventStoreRepository.SaveEventsAsync(aggregateId, partitionKey, events, 0);
+        var result = await EventStoreRepository.SaveEventsAsync(aggregateId, partitionKey, events, 0);
 
-        await act.Should().ThrowAsync<Exception>();
+        result.IsSuccess.Should().BeFalse();
 
         var savedEvents = await Context.EventStore.CountAsync();
         savedEvents.Should().Be(0);
@@ -231,7 +233,7 @@ public class EventStoreIntegrationTests : IntegrationTestBase
         var endTime = DateTime.UtcNow;
         var duration = endTime - startTime;
 
-        retrievedEvents.Should().HaveCount(100);
+        retrievedEvents.Value.Should().HaveCount(100);
         duration.Should().BeLessThan(TimeSpan.FromSeconds(5));
     }
 }

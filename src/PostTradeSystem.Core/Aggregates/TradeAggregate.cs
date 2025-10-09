@@ -1,5 +1,6 @@
 using PostTradeSystem.Core.Events;
 using PostTradeSystem.Core.Models;
+using PostTradeSystem.Core.Common;
 
 namespace PostTradeSystem.Core.Aggregates;
 
@@ -72,12 +73,14 @@ public class TradeAggregate : AggregateRootBase
         return $"{traderId}:{instrumentId}";
     }
 
-    public void ChangeStatus(TradeStatus newStatus, string reason, string correlationId, string causedBy)
+    public Result ChangeStatus(TradeStatus newStatus, string reason, string correlationId, string causedBy)
     {
         if (_status == newStatus)
-            return;
+            return Result.Success();
 
-        ValidateStatusTransition(newStatus);
+        var validationResult = ValidateStatusTransition(newStatus);
+        if (validationResult.IsFailure)
+            return validationResult;
 
         var statusChangedEvent = CreateTradeEvent(
             (version, corrId, causedByParam) => new TradeStatusChangedEvent(
@@ -85,17 +88,21 @@ public class TradeAggregate : AggregateRootBase
             correlationId, causedBy);
 
         ApplyEvent(statusChangedEvent);
+        return Result.Success();
     }
 
-    public void UpdateTradeDetails(Dictionary<string, object> updates, string correlationId, string causedBy)
+    public Result UpdateTradeDetails(Dictionary<string, object> updates, string correlationId, string causedBy)
     {
-        ValidateTradeCanBeUpdated();
+        var validationResult = ValidateTradeCanBeUpdated();
+        if (validationResult.IsFailure)
+            return validationResult;
 
         var tradeUpdatedEvent = CreateTradeEvent(
             (version, corrId, causedByParam) => new TradeUpdatedEvent(Id, updates, version, corrId, causedByParam),
             correlationId, causedBy);
 
         ApplyEvent(tradeUpdatedEvent);
+        return Result.Success();
     }
 
     public void EnrichTrade(string enrichmentType, Dictionary<string, object> enrichmentData, string correlationId, string causedBy)
@@ -116,20 +123,22 @@ public class TradeAggregate : AggregateRootBase
         ApplyEvent(validationFailedEvent);
     }
 
-    private void ValidateStatusTransition(TradeStatus newStatus)
+    private Result ValidateStatusTransition(TradeStatus newStatus)
     {
         if (newStatus != TradeStatus.Failed && (int)newStatus < (int)_status)
         {
-            throw new InvalidOperationException($"Cannot change status from {_status} to {newStatus}");
+            return Result.Failure($"Cannot change status from {_status} to {newStatus}");
         }
+        return Result.Success();
     }
 
-    private void ValidateTradeCanBeUpdated()
+    private Result ValidateTradeCanBeUpdated()
     {
         if (_status == TradeStatus.Settled)
         {
-            throw new InvalidOperationException("Cannot update a settled trade");
+            return Result.Failure("Cannot update a settled trade");
         }
+        return Result.Success();
     }
 
     private T CreateTradeEvent<T>(Func<long, string, string, T> eventFactory, string correlationId, string causedBy) 

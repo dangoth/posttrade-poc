@@ -2,6 +2,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using PostTradeSystem.Core.Events;
 using PostTradeSystem.Core.Serialization;
+using PostTradeSystem.Core.Common;
 using PostTradeSystem.Infrastructure.Data;
 using PostTradeSystem.Infrastructure.Entities;
 using PostTradeSystem.Infrastructure.Services;
@@ -33,38 +34,38 @@ public class EventStoreRepository : IEventStoreRepository
     private DbSet<EventStoreEntity> EventStore => _context.Set<EventStoreEntity>();
     private DbSet<IdempotencyEntity> IdempotencyKeys => _context.Set<IdempotencyEntity>();
 
-    public async Task<IEnumerable<IDomainEvent>> GetEventsAsync(string aggregateId, long fromVersion = 0, CancellationToken cancellationToken = default)
+    public async Task<Result<IEnumerable<IDomainEvent>>> GetEventsAsync(string aggregateId, long fromVersion = 0, CancellationToken cancellationToken = default)
     {
-        var eventEntities = await EventStore
-            .Where(e => e.AggregateId == aggregateId && e.AggregateVersion > fromVersion)
-            .OrderBy(e => e.AggregateVersion)
-            .ToListAsync(cancellationToken);
-
-        var events = new List<IDomainEvent>();
-        foreach (var entity in eventEntities)
+        try
         {
-            var metadataResult = ExtractSchemaVersionFromMetadata(entity.Metadata, entity.EventId, entity.AggregateId, entity.OccurredAt);
-            
-            if (metadataResult.ShouldDeadLetter)
+            var eventEntities = await EventStore
+                .Where(e => e.AggregateId == aggregateId && e.AggregateVersion > fromVersion)
+                .OrderBy(e => e.AggregateVersion)
+                .ToListAsync(cancellationToken);
+
+            var events = new List<IDomainEvent>();
+            foreach (var entity in eventEntities)
             {
-                _logger.LogError("Skipping event {EventId} due to metadata parsing failure: {Reason}", 
-                    entity.EventId, metadataResult.DeadLetterReason);
+                var metadataResult = ExtractSchemaVersionFromMetadata(entity.Metadata, entity.EventId, entity.AggregateId, entity.OccurredAt);
                 
-                if (_outboxService != null)
+                if (metadataResult.ShouldDeadLetter)
                 {
-                    await MoveEventToDeadLetterAsync(entity, metadataResult.DeadLetterReason!);
+                    _logger.LogError("Skipping event {EventId} due to metadata parsing failure: {Reason}", 
+                        entity.EventId, metadataResult.DeadLetterReason);
+                    
+                    if (_outboxService != null)
+                    {
+                        await MoveEventToDeadLetterAsync(entity, metadataResult.DeadLetterReason!);
+                    }
+                    continue;
                 }
-                continue;
-            }
 
-            if (!metadataResult.IsReliable)
-            {
-                _logger.LogWarning("Using unreliable schema version {Version} for event {EventId}: {Warning}", 
-                    metadataResult.SchemaVersion, entity.EventId, metadataResult.WarningMessage);
-            }
+                if (!metadataResult.IsReliable)
+                {
+                    _logger.LogWarning("Using unreliable schema version {Version} for event {EventId}: {Warning}", 
+                        metadataResult.SchemaVersion, entity.EventId, metadataResult.WarningMessage);
+                }
 
-            try
-            {
                 var serializedEvent = new SerializedEvent(
                     entity.EventType,
                     metadataResult.SchemaVersion,
@@ -72,48 +73,57 @@ public class EventStoreRepository : IEventStoreRepository
                     "default",
                     entity.OccurredAt,
                     new Dictionary<string, string>());
-                var domainEvent = _serializationService.Deserialize(serializedEvent);
-                events.Add(domainEvent);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Failed to deserialize event {EventId} with schema version {Version}. Moving to dead letter queue", 
-                    entity.EventId, metadataResult.SchemaVersion);
-                
-                if (_outboxService != null)
+                    
+                var deserializeResult = _serializationService.Deserialize(serializedEvent);
+                if (deserializeResult.IsFailure)
                 {
-                    await MoveEventToDeadLetterAsync(entity, $"Deserialization failed: {ex.Message}");
+                    _logger.LogError("Failed to deserialize event {EventId} with schema version {Version}: {Error}", 
+                        entity.EventId, metadataResult.SchemaVersion, deserializeResult.Error);
+                    
+                    if (_outboxService != null)
+                    {
+                        await MoveEventToDeadLetterAsync(entity, $"Deserialization failed: {deserializeResult.Error}");
+                    }
+                    continue;
                 }
+                
+                events.Add(deserializeResult.Value!);
             }
-        }
 
-        return events;
+            return Result<IEnumerable<IDomainEvent>>.Success(events);
+        }
+        catch (Exception ex)
+        {
+            return Result<IEnumerable<IDomainEvent>>.Failure($"Failed to get events: {ex.Message}");
+        }
     }
 
-    public async Task<IEnumerable<IDomainEvent>> GetEventsByPartitionKeyAsync(string partitionKey, long fromVersion = 0, CancellationToken cancellationToken = default)
+    public async Task<Result<IEnumerable<IDomainEvent>>> GetEventsByPartitionKeyAsync(string partitionKey, long fromVersion = 0, CancellationToken cancellationToken = default)
     {
-        var eventEntities = await EventStore
-            .Where(e => e.PartitionKey == partitionKey && e.AggregateVersion > fromVersion)
-            .OrderBy(e => e.CreatedAt)
-            .ThenBy(e => e.AggregateVersion)
-            .ToListAsync(cancellationToken);
-
-        var events = new List<IDomainEvent>();
-        foreach (var entity in eventEntities)
+        try
         {
-            var metadataResult = ExtractSchemaVersionFromMetadata(entity.Metadata, entity.EventId, entity.AggregateId, entity.OccurredAt);
-            
-            if (metadataResult.ShouldDeadLetter)
+            var eventEntities = await EventStore
+                .Where(e => e.PartitionKey == partitionKey && e.AggregateVersion > fromVersion)
+                .OrderBy(e => e.CreatedAt)
+                .ThenBy(e => e.AggregateVersion)
+                .ToListAsync(cancellationToken);
+
+            var events = new List<IDomainEvent>();
+            foreach (var entity in eventEntities)
             {
-                _logger.LogError("Skipping event {EventId} due to metadata parsing failure: {Reason}", 
-                    entity.EventId, metadataResult.DeadLetterReason);
+                var metadataResult = ExtractSchemaVersionFromMetadata(entity.Metadata, entity.EventId, entity.AggregateId, entity.OccurredAt);
                 
-                if (_outboxService != null)
+                if (metadataResult.ShouldDeadLetter)
                 {
-                    await MoveEventToDeadLetterAsync(entity, metadataResult.DeadLetterReason!);
+                    _logger.LogError("Skipping event {EventId} due to metadata parsing failure: {Reason}", 
+                        entity.EventId, metadataResult.DeadLetterReason);
+                    
+                    if (_outboxService != null)
+                    {
+                        await MoveEventToDeadLetterAsync(entity, metadataResult.DeadLetterReason!);
+                    }
+                    continue;
                 }
-                continue;
-            }
             
             var serializedEvent = new SerializedEvent(
                 entity.EventType,
@@ -122,14 +132,33 @@ public class EventStoreRepository : IEventStoreRepository
                 "default",
                 entity.OccurredAt,
                 new Dictionary<string, string>());
-            var domainEvent = _serializationService.Deserialize(serializedEvent);
-            events.Add(domainEvent);
+                
+            var deserializeResult = _serializationService.Deserialize(serializedEvent);
+            if (deserializeResult.IsFailure)
+            {
+                if (_outboxService != null)
+                {
+                    var moveResult = await MoveEventToDeadLetterAsync(entity, $"Deserialization failed: {deserializeResult.Error}");
+                    if (moveResult.IsFailure)
+                    {
+                        _logger.LogError("Failed to move event to dead letter: {Error}", moveResult.Error);
+                    }
+                }
+                continue;
+            }
+            
+            events.Add(deserializeResult.Value!);
         }
 
-        return events;
+        return Result<IEnumerable<IDomainEvent>>.Success(events);
+        }
+        catch (Exception ex)
+        {
+            return Result<IEnumerable<IDomainEvent>>.Failure($"Failed to get events by partition key: {ex.Message}");
+        }
     }
 
-    public async Task SaveEventsAsync(string aggregateId, string partitionKey, IEnumerable<IDomainEvent> events, long expectedVersion, CancellationToken cancellationToken = default)
+    public async Task<Result> SaveEventsAsync(string aggregateId, string partitionKey, IEnumerable<IDomainEvent> events, long expectedVersion, CancellationToken cancellationToken = default)
     {
         using var transaction = await _context.Database.BeginTransactionAsync(cancellationToken);
         
@@ -139,7 +168,8 @@ public class EventStoreRepository : IEventStoreRepository
             
             if (currentVersion != expectedVersion)
             {
-                throw new InvalidOperationException($"Concurrency conflict. Expected version {expectedVersion}, but current version is {currentVersion}");
+                await transaction.RollbackAsync(cancellationToken);
+                return Result.Failure($"Concurrency conflict. Expected version {expectedVersion}, but current version is {currentVersion}");
             }
 
             var eventEntities = new List<EventStoreEntity>();
@@ -155,7 +185,14 @@ public class EventStoreRepository : IEventStoreRepository
                     continue;
                 }
 
-                var serializedEvent = await _serializationService.SerializeAsync(domainEvent);
+                var serializeResult = await _serializationService.SerializeAsync(domainEvent);
+                if (serializeResult.IsFailure)
+                {
+                    await transaction.RollbackAsync(cancellationToken);
+                    return Result.Failure($"Failed to serialize event {domainEvent.EventId}: {serializeResult.Error}");
+                }
+                
+                var serializedEvent = serializeResult.Value!;
                 var eventData = serializedEvent.Data;
                 var metadata = CreateMetadata(domainEvent, serializedEvent);
 
@@ -194,109 +231,168 @@ public class EventStoreRepository : IEventStoreRepository
                     foreach (var domainEvent in eventsToPublish)
                     {
                         var topic = DetermineTopicForEvent(domainEvent);
-                        await _outboxService.SaveEventToOutboxAsync(domainEvent, topic, partitionKey, cancellationToken);
+                        var outboxResult = await _outboxService.SaveEventToOutboxAsync(domainEvent, topic, partitionKey, cancellationToken);
+                        if (outboxResult.IsFailure)
+                        {
+                            await transaction.RollbackAsync(cancellationToken);
+                            return Result.Failure($"Failed to save event to outbox: {outboxResult.Error}");
+                        }
                     }
                 }
 
                 // Commit the transaction - both event store and outbox writes succeed or fail together
                 await transaction.CommitAsync(cancellationToken);
+                return Result.Success();
             }
             else
             {
                 await transaction.CommitAsync(cancellationToken);
+                return Result.Success();
             }
         }
-        catch
+        catch (Exception ex)
         {
             await transaction.RollbackAsync(cancellationToken);
-            throw;
+            return Result.Failure($"Failed to save events: {ex.Message}");
         }
     }
 
-    public async Task<bool> CheckIdempotencyAsync(string idempotencyKey, string requestHash, CancellationToken cancellationToken = default)
+    public async Task<Result<bool>> CheckIdempotencyAsync(string idempotencyKey, string requestHash, CancellationToken cancellationToken = default)
     {
-        var existing = await IdempotencyKeys
-            .FirstOrDefaultAsync(i => i.IdempotencyKey == idempotencyKey && i.RequestHash == requestHash, cancellationToken);
-
-        return existing != null && existing.ExpiresAt > DateTime.UtcNow;
-    }
-
-    public async Task SaveIdempotencyAsync(string idempotencyKey, string aggregateId, string requestHash, string responseData, TimeSpan expiration, CancellationToken cancellationToken = default)
-    {
-        var entity = new IdempotencyEntity
+        try
         {
-            IdempotencyKey = idempotencyKey,
-            AggregateId = aggregateId,
-            RequestHash = requestHash,
-            ResponseData = responseData,
-            CreatedAt = DateTime.UtcNow,
-            ExpiresAt = DateTime.UtcNow.Add(expiration)
-        };
+            var existing = await IdempotencyKeys
+                .FirstOrDefaultAsync(i => i.IdempotencyKey == idempotencyKey && i.RequestHash == requestHash, cancellationToken);
 
-        IdempotencyKeys.Add(entity);
-        await _context.SaveChangesAsync(cancellationToken);
-    }
-
-    public async Task<string?> GetIdempotentResponseAsync(string idempotencyKey, string requestHash, CancellationToken cancellationToken = default)
-    {
-        var entity = await IdempotencyKeys
-            .FirstOrDefaultAsync(i => i.IdempotencyKey == idempotencyKey && i.RequestHash == requestHash, cancellationToken);
-
-        if (entity == null || entity.ExpiresAt <= DateTime.UtcNow)
-        {
-            return null;
+            var result = existing != null && existing.ExpiresAt > DateTime.UtcNow;
+            return Result<bool>.Success(result);
         }
-
-        return entity.ResponseData;
-    }
-
-    public async Task MarkEventsAsProcessedAsync(IEnumerable<string> eventIds, CancellationToken cancellationToken = default)
-    {
-        var events = await EventStore
-            .Where(e => eventIds.Contains(e.EventId))
-            .ToListAsync(cancellationToken);
-
-        foreach (var eventEntity in events)
+        catch (Exception ex)
         {
-            eventEntity.IsProcessed = true;
-            eventEntity.ProcessedAt = DateTime.UtcNow;
+            return Result<bool>.Failure($"Failed to check idempotency: {ex.Message}");
         }
-
-        await _context.SaveChangesAsync(cancellationToken);
     }
 
-    public async Task<IEnumerable<IDomainEvent>> GetUnprocessedEventsAsync(int batchSize = 100, CancellationToken cancellationToken = default)
+    public async Task<Result> SaveIdempotencyAsync(string idempotencyKey, string aggregateId, string requestHash, string responseData, TimeSpan expiration, CancellationToken cancellationToken = default)
     {
-        var eventEntities = await EventStore
-            .Where(e => !e.IsProcessed)
-            .OrderBy(e => e.CreatedAt)
-            .Take(batchSize)
-            .ToListAsync(cancellationToken);
-
-        var events = new List<IDomainEvent>();
-        foreach (var entity in eventEntities)
+        try
         {
-            var metadataResult = ExtractSchemaVersionFromMetadata(entity.Metadata, entity.EventId, entity.AggregateId, entity.OccurredAt);
-            if (metadataResult.ShouldDeadLetter)
+            var entity = new IdempotencyEntity
             {
-                if (_outboxService != null)
-                {
-                    await MoveEventToDeadLetterAsync(entity, metadataResult.DeadLetterReason!);
-                }
-                continue;
-            }
-            var serializedEvent = new SerializedEvent(
-                entity.EventType,
-                metadataResult.SchemaVersion,
-                entity.EventData,
-                "default",
-                entity.OccurredAt,
-                new Dictionary<string, string>());
-            var domainEvent = _serializationService.Deserialize(serializedEvent);
-            events.Add(domainEvent);
-        }
+                IdempotencyKey = idempotencyKey,
+                AggregateId = aggregateId,
+                RequestHash = requestHash,
+                ResponseData = responseData,
+                CreatedAt = DateTime.UtcNow,
+                ExpiresAt = DateTime.UtcNow.Add(expiration)
+            };
 
-        return events;
+            IdempotencyKeys.Add(entity);
+            await _context.SaveChangesAsync(cancellationToken);
+            return Result.Success();
+        }
+        catch (Exception ex)
+        {
+            return Result.Failure($"Failed to save idempotency: {ex.Message}");
+        }
+    }
+
+    public async Task<Result<string?>> GetIdempotentResponseAsync(string idempotencyKey, string requestHash, CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var entity = await IdempotencyKeys
+                .FirstOrDefaultAsync(i => i.IdempotencyKey == idempotencyKey && i.RequestHash == requestHash, cancellationToken);
+
+            if (entity == null || entity.ExpiresAt <= DateTime.UtcNow)
+            {
+                return Result<string?>.Success(null);
+            }
+
+            return Result<string?>.Success(entity.ResponseData);
+        }
+        catch (Exception ex)
+        {
+            return Result<string?>.Failure($"Failed to get idempotent response: {ex.Message}");
+        }
+    }
+
+    public async Task<Result> MarkEventsAsProcessedAsync(IEnumerable<string> eventIds, CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var events = await EventStore
+                .Where(e => eventIds.Contains(e.EventId))
+                .ToListAsync(cancellationToken);
+
+            foreach (var eventEntity in events)
+            {
+                eventEntity.IsProcessed = true;
+                eventEntity.ProcessedAt = DateTime.UtcNow;
+            }
+
+            await _context.SaveChangesAsync(cancellationToken);
+            return Result.Success();
+        }
+        catch (Exception ex)
+        {
+            return Result.Failure($"Failed to mark events as processed: {ex.Message}");
+        }
+    }
+
+    public async Task<Result<IEnumerable<IDomainEvent>>> GetUnprocessedEventsAsync(int batchSize = 100, CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var eventEntities = await EventStore
+                .Where(e => !e.IsProcessed)
+                .OrderBy(e => e.CreatedAt)
+                .Take(batchSize)
+                .ToListAsync(cancellationToken);
+
+            var events = new List<IDomainEvent>();
+            foreach (var entity in eventEntities)
+            {
+                var metadataResult = ExtractSchemaVersionFromMetadata(entity.Metadata, entity.EventId, entity.AggregateId, entity.OccurredAt);
+                if (metadataResult.ShouldDeadLetter)
+                {
+                    if (_outboxService != null)
+                    {
+                        var moveResult = await MoveEventToDeadLetterAsync(entity, metadataResult.DeadLetterReason!);
+                        if (moveResult.IsFailure)
+                        {
+                            _logger.LogError("Failed to move event to dead letter: {Error}", moveResult.Error);
+                        }
+                    }
+                    continue;
+                }
+                var serializedEvent = new SerializedEvent(
+                    entity.EventType,
+                    metadataResult.SchemaVersion,
+                    entity.EventData,
+                    "default",
+                    entity.OccurredAt,
+                    new Dictionary<string, string>());
+                    
+                var deserializeResult = _serializationService.Deserialize(serializedEvent);
+                if (deserializeResult.IsFailure)
+                {
+                    if (_outboxService != null)
+                    {
+                        await MoveEventToDeadLetterAsync(entity, $"Deserialization failed: {deserializeResult.Error}");
+                    }
+                    continue;
+                }
+                
+                events.Add(deserializeResult.Value!);
+            }
+
+            return Result<IEnumerable<IDomainEvent>>.Success(events);
+        }
+        catch (Exception ex)
+        {
+            return Result<IEnumerable<IDomainEvent>>.Failure($"Failed to get unprocessed events: {ex.Message}");
+        }
     }
 
     private async Task<long> GetCurrentVersionAsync(string aggregateId, CancellationToken cancellationToken)
@@ -381,7 +477,7 @@ public class EventStoreRepository : IEventStoreRepository
         return MetadataParsingResult.DeadLetter(finalDeadLetterReason);
     }
 
-    private async Task MoveEventToDeadLetterAsync(EventStoreEntity entity, string reason)
+    private async Task<Result> MoveEventToDeadLetterAsync(EventStoreEntity entity, string reason)
     {
         try
         {
@@ -396,27 +492,42 @@ public class EventStoreRepository : IEventStoreRepository
                 Guid.NewGuid().ToString(),
                 "EventStoreRepository");
 
-            await _outboxService!.SaveEventToOutboxAsync(deadLetterEvent, "events.deadletter", entity.AggregateId);
+            var saveResult = await _outboxService!.SaveEventToOutboxAsync(deadLetterEvent, "events.deadletter", entity.AggregateId);
+            if (saveResult.IsFailure)
+            {
+                _logger.LogError("Failed to save dead letter event to outbox: {Error}", saveResult.Error);
+                return Result.Failure($"Failed to save dead letter event: {saveResult.Error}");
+            }
             
             _logger.LogInformation("Successfully moved event {EventId} to dead letter queue with reason: {Reason}", 
                 entity.EventId, reason);
+            return Result.Success();
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Failed to move event {EventId} to dead letter queue", entity.EventId);
+            return Result.Failure($"Failed to move event to dead letter queue: {ex.Message}");
         }
     }
 
-    public async Task CleanupExpiredIdempotencyKeysAsync(CancellationToken cancellationToken = default)
+    public async Task<Result> CleanupExpiredIdempotencyKeysAsync(CancellationToken cancellationToken = default)
     {
-        var expiredKeys = await IdempotencyKeys
-            .Where(i => i.ExpiresAt <= DateTime.UtcNow)
-            .ToListAsync(cancellationToken);
-
-        if (expiredKeys.Any())
+        try
         {
-            IdempotencyKeys.RemoveRange(expiredKeys);
-            await _context.SaveChangesAsync(cancellationToken);
+            var expiredKeys = await IdempotencyKeys
+                .Where(i => i.ExpiresAt <= DateTime.UtcNow)
+                .ToListAsync(cancellationToken);
+
+            if (expiredKeys.Any())
+            {
+                IdempotencyKeys.RemoveRange(expiredKeys);
+                await _context.SaveChangesAsync(cancellationToken);
+            }
+            return Result.Success();
+        }
+        catch (Exception ex)
+        {
+            return Result.Failure($"Failed to cleanup expired idempotency keys: {ex.Message}");
         }
     }
 

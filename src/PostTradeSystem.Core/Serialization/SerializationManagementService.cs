@@ -2,6 +2,7 @@ using PostTradeSystem.Core.Events;
 using PostTradeSystem.Core.Schemas;
 using PostTradeSystem.Core.Serialization.Contracts;
 using PostTradeSystem.Core.Services;
+using PostTradeSystem.Core.Common;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
@@ -38,61 +39,81 @@ public class SerializationManagementService : ISerializationManagementService
 
     #region Event Serialization
 
-    public async Task<SerializedEvent> SerializeAsync(IDomainEvent domainEvent, int? targetSchemaVersion = null)
+    public async Task<Result<SerializedEvent>> SerializeAsync(IDomainEvent domainEvent, int? targetSchemaVersion = null)
     {
-        var eventType = GetEventTypeName(domainEvent);
-        var schemaVersion = targetSchemaVersion ?? _registry.GetLatestSchemaVersion(eventType);
-        
-        // Debug: Check if contract type exists for this version
-        var contractType = _registry.GetContractType(eventType, schemaVersion);
-        
-        var contract = _registry.ConvertFromDomainEvent(domainEvent, schemaVersion);
-        var jsonData = JsonSerializer.Serialize(contract, contract.GetType(), _jsonOptions);
-        var schemaId = await GetSchemaIdAsync(eventType, schemaVersion);
-        
         try
         {
+            var eventType = GetEventTypeName(domainEvent);
+            var schemaVersion = targetSchemaVersion ?? _registry.GetLatestSchemaVersion(eventType);
+            
+            // Debug: Check if contract type exists for this version
+            var contractType = _registry.GetContractType(eventType, schemaVersion);
+            if (contractType == null)
+            {
+                return Result<SerializedEvent>.Failure($"No contract registered for event type '{eventType}' schema version {schemaVersion}");
+            }
+            
+            var contract = _registry.ConvertFromDomainEvent(domainEvent, schemaVersion);
+            var jsonData = JsonSerializer.Serialize(contract, contract.GetType(), _jsonOptions);
+            var schemaId = await GetSchemaIdAsync(eventType, schemaVersion);
+            
             var validationResult = ValidateEventData(eventType, jsonData, schemaVersion);
             if (!validationResult.IsValid)
             {
                 // Log warning but don't fail serialization in case schemas aren't fully initialized
                 System.Diagnostics.Debug.WriteLine($"Schema validation warning: {validationResult.ErrorMessage}");
             }
+            
+            var serializedEvent = new SerializedEvent(
+                EventType: eventType,
+                SchemaVersion: schemaVersion,
+                Data: jsonData,
+                SchemaId: schemaId,
+                SerializedAt: DateTime.UtcNow,
+                Metadata: CreateSerializationMetadata(domainEvent, contract));
+                
+            return Result<SerializedEvent>.Success(serializedEvent);
         }
         catch (Exception ex)
         {
-            // Log warning but don't fail serialization
-            System.Diagnostics.Debug.WriteLine($"Schema validation error: {ex.Message}");
+            return Result<SerializedEvent>.Failure($"Failed to serialize event: {ex.Message}");
         }
-        
-        return new SerializedEvent(
-            EventType: eventType,
-            SchemaVersion: schemaVersion,
-            Data: jsonData,
-            SchemaId: schemaId,
-            SerializedAt: DateTime.UtcNow,
-            Metadata: CreateSerializationMetadata(domainEvent, contract));
     }
 
-    public IDomainEvent Deserialize(SerializedEvent serializedEvent)
+    public Result<IDomainEvent> Deserialize(SerializedEvent serializedEvent)
     {
-        var contractType = _registry.GetContractType(serializedEvent.EventType, serializedEvent.SchemaVersion);
-        if (contractType == null)
+        try
         {
-            throw new InvalidOperationException(
-                $"No contract registered for event type '{serializedEvent.EventType}' schema version {serializedEvent.SchemaVersion}");
+            var contractType = _registry.GetContractType(serializedEvent.EventType, serializedEvent.SchemaVersion);
+            if (contractType == null)
+            {
+                return Result<IDomainEvent>.Failure(
+                    $"No contract registered for event type '{serializedEvent.EventType}' schema version {serializedEvent.SchemaVersion}");
+            }
+
+            // Skip validation during deserialization to avoid circular dependencies
+            var contract = (IVersionedEventContract)JsonSerializer.Deserialize(serializedEvent.Data, contractType, _jsonOptions)!;
+            if (contract == null)
+            {
+                return Result<IDomainEvent>.Failure($"Failed to deserialize event data for type '{serializedEvent.EventType}'");
+            }
+
+            var latestSchemaVersion = _registry.GetLatestSchemaVersion(serializedEvent.EventType);
+            if (contract.SchemaVersion != latestSchemaVersion)
+            {
+                var conversionResult = ConvertToLatestSchemaVersion(contract, latestSchemaVersion);
+                if (conversionResult.IsFailure)
+                    return Result<IDomainEvent>.Failure(conversionResult.Error);
+                contract = conversionResult.Value!;
+            }
+
+            var domainEvent = _registry.ConvertToDomainEvent(contract);
+            return Result<IDomainEvent>.Success(domainEvent);
         }
-
-        // Skip validation during deserialization to avoid circular dependencies
-        var contract = (IVersionedEventContract)JsonSerializer.Deserialize(serializedEvent.Data, contractType, _jsonOptions)!;
-
-        var latestSchemaVersion = _registry.GetLatestSchemaVersion(serializedEvent.EventType);
-        if (contract.SchemaVersion != latestSchemaVersion)
+        catch (Exception ex)
         {
-            contract = ConvertToLatestSchemaVersion(contract, latestSchemaVersion);
+            return Result<IDomainEvent>.Failure($"Failed to deserialize event: {ex.Message}");
         }
-
-        return _registry.ConvertToDomainEvent(contract);
     }
 
     #endregion
@@ -310,11 +331,11 @@ public class SerializationManagementService : ISerializationManagementService
         return 1;
     }
 
-    private IVersionedEventContract ConvertToLatestSchemaVersion(IVersionedEventContract contract, int targetSchemaVersion)
+    private Result<IVersionedEventContract> ConvertToLatestSchemaVersion(IVersionedEventContract contract, int targetSchemaVersion)
     {
         if (contract.SchemaVersion == targetSchemaVersion)
         {
-            return contract;
+            return Result<IVersionedEventContract>.Success(contract);
         }
 
         var currentSchemaVersion = contract.SchemaVersion;
@@ -323,28 +344,40 @@ public class SerializationManagementService : ISerializationManagementService
         while (currentSchemaVersion < targetSchemaVersion)
         {
             var nextSchemaVersion = currentSchemaVersion + 1;
-            current = ConvertToNextSchemaVersion(current, nextSchemaVersion);
+            var conversionResult = ConvertToNextSchemaVersion(current, nextSchemaVersion);
+            if (conversionResult.IsFailure)
+                return conversionResult;
+            current = conversionResult.Value!;
             currentSchemaVersion = nextSchemaVersion;
         }
 
-        return current;
+        return Result<IVersionedEventContract>.Success(current);
     }
 
-    private IVersionedEventContract ConvertToNextSchemaVersion(IVersionedEventContract contract, int targetSchemaVersion)
+    private Result<IVersionedEventContract> ConvertToNextSchemaVersion(IVersionedEventContract contract, int targetSchemaVersion)
     {
-        var eventType = contract.EventType;
-        
-        if (eventType == "TradeCreated" && contract.SchemaVersion == 1 && targetSchemaVersion == 2)
+        try
         {
-            return _registry.ConvertVersion<TradeCreatedEventV1, TradeCreatedEventV2>((TradeCreatedEventV1)contract);
-        }
-        
-        if (eventType == "TradeStatusChanged" && contract.SchemaVersion == 1 && targetSchemaVersion == 2)
-        {
-            return _registry.ConvertVersion<TradeStatusChangedEventV1, TradeStatusChangedEventV2>((TradeStatusChangedEventV1)contract);
-        }
+            var eventType = contract.EventType;
+            
+            if (eventType == "TradeCreated" && contract.SchemaVersion == 1 && targetSchemaVersion == 2)
+            {
+                var converted = _registry.ConvertVersion<TradeCreatedEventV1, TradeCreatedEventV2>((TradeCreatedEventV1)contract);
+                return Result<IVersionedEventContract>.Success(converted);
+            }
+            
+            if (eventType == "TradeStatusChanged" && contract.SchemaVersion == 1 && targetSchemaVersion == 2)
+            {
+                var converted = _registry.ConvertVersion<TradeStatusChangedEventV1, TradeStatusChangedEventV2>((TradeStatusChangedEventV1)contract);
+                return Result<IVersionedEventContract>.Success(converted);
+            }
 
-        throw new InvalidOperationException($"No converter available for {eventType} from schema version {contract.SchemaVersion} to {targetSchemaVersion}");
+            return Result<IVersionedEventContract>.Failure($"No converter available for {eventType} from schema version {contract.SchemaVersion} to {targetSchemaVersion}");
+        }
+        catch (Exception ex)
+        {
+            return Result<IVersionedEventContract>.Failure($"Failed to convert schema version: {ex.Message}");
+        }
     }
 
     private static JsonSerializerOptions CreateJsonOptions()

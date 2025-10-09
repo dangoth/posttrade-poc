@@ -93,9 +93,9 @@ public class OutboxRepositoryTests : SqlServerTestBase
         var result = await _repository.GetUnprocessedEventsAsync();
 
         // Assert
-        result.Should().HaveCount(1);
-        result.First().EventId.Should().Be("unprocessed-event");
-        result.First().IsProcessed.Should().BeFalse();
+        result.Value!.Should().HaveCount(1);
+        result.Value!.First().EventId.Should().Be("unprocessed-event");
+        result.Value!.First().IsProcessed.Should().BeFalse();
     }
 
     [Fact]
@@ -193,8 +193,8 @@ public class OutboxRepositoryTests : SqlServerTestBase
         var result = await _repository.GetFailedEventsForRetryAsync(retryDelay, maxRetryCount);
 
         // Assert
-        result.Should().HaveCount(1);
-        result.First().EventId.Should().Be("eligible-event");
+        result.Value!.Should().HaveCount(1);
+        result.Value!.First().EventId.Should().Be("eligible-event");
     }
 
     [Fact]

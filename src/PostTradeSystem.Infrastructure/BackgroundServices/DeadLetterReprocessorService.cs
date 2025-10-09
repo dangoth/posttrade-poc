@@ -61,7 +61,14 @@ public class DeadLetterReprocessorService : BackgroundService
             using var scope = _serviceScopeFactory.CreateScope();
             var outboxService = scope.ServiceProvider.GetRequiredService<IOutboxService>();
             
-            var deadLetteredEvents = await outboxService.GetDeadLetteredEventsAsync(100, stoppingToken);
+            var deadLetteredEventsResult = await outboxService.GetDeadLetteredEventsAsync(100, stoppingToken);
+            if (deadLetteredEventsResult.IsFailure)
+            {
+                _logger.LogError("Failed to get dead lettered events: {Error}", deadLetteredEventsResult.Error);
+                return;
+            }
+
+            var deadLetteredEvents = deadLetteredEventsResult.Value!;
             var oldDeadLetters = deadLetteredEvents
                 .Where(e => e.DeadLetteredAt.HasValue && 
                            DateTime.UtcNow - e.DeadLetteredAt.Value >= _deadLetterAge)
@@ -74,15 +81,16 @@ public class DeadLetterReprocessorService : BackgroundService
 
                 foreach (var deadLetter in oldDeadLetters)
                 {
-                    try
+                    var reprocessResult = await outboxService.ReprocessDeadLetteredEventAsync(deadLetter.Id, stoppingToken);
+                    if (reprocessResult.IsSuccess)
                     {
-                        await outboxService.ReprocessDeadLetteredEventAsync(deadLetter.Id, stoppingToken);
                         _logger.LogInformation("Automatically reprocessed dead lettered event {EventId} (Age: {Age})", 
                             deadLetter.EventId, DateTime.UtcNow - deadLetter.DeadLetteredAt);
                     }
-                    catch (Exception ex)
+                    else
                     {
-                        _logger.LogWarning(ex, "Failed to reprocess dead lettered event {EventId}", deadLetter.EventId);
+                        _logger.LogWarning("Failed to reprocess dead lettered event {EventId}: {Error}", 
+                            deadLetter.EventId, reprocessResult.Error);
                     }
                 }
             }

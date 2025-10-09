@@ -1,8 +1,10 @@
+using FluentAssertions;
+using Moq;
+using PostTradeSystem.Core.Common;
 using PostTradeSystem.Core.Events;
 using PostTradeSystem.Core.Schemas;
 using PostTradeSystem.Core.Serialization;
 using PostTradeSystem.Core.Services;
-using Moq;
 using Xunit;
 
 namespace PostTradeSystem.Core.Tests.Serialization;
@@ -36,11 +38,12 @@ public class EventSerializationOrchestratorTests
         var expectedResult = new SerializedEvent("TradeCreated", 1, "{}", "schema1", DateTime.UtcNow, new Dictionary<string, string>());
         
         _mockEventSerializer.Setup(x => x.SerializeAsync(domainEvent, null))
-            .ReturnsAsync(expectedResult);
+            .ReturnsAsync(Result<SerializedEvent>.Success(expectedResult));
 
         var result = await _orchestrator.SerializeAsync(domainEvent);
 
-        Assert.Equal(expectedResult, result);
+        result.IsSuccess.Should().BeTrue();
+        result.Value.Should().Be(expectedResult);
         _mockEventSerializer.Verify(x => x.SerializeAsync(domainEvent, null), Times.Once);
     }
 
@@ -51,11 +54,12 @@ public class EventSerializationOrchestratorTests
         var expectedResult = CreateTestEvent();
         
         _mockEventSerializer.Setup(x => x.DeserializeAsync(serializedEvent))
-            .ReturnsAsync(expectedResult);
+            .ReturnsAsync(Result<IDomainEvent>.Success(expectedResult));
 
         var result = await _orchestrator.DeserializeAsync(serializedEvent);
 
-        Assert.Equal(expectedResult, result);
+        result.IsSuccess.Should().BeTrue();
+        result.Value.Should().Be(expectedResult);
         _mockEventSerializer.Verify(x => x.DeserializeAsync(serializedEvent), Times.Once);
     }
 

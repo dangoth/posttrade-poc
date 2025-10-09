@@ -45,7 +45,11 @@ public class OutboxProcessorService : BackgroundService
             {
                 using var scope = _serviceScopeFactory.CreateScope();
                 var outboxService = scope.ServiceProvider.GetRequiredService<IOutboxService>();
-                await outboxService.ProcessOutboxEventsAsync(stoppingToken);
+                var result = await outboxService.ProcessOutboxEventsAsync(stoppingToken);
+                if (result.IsFailure)
+                {
+                    _logger.LogError("Failed to process outbox events: {Error}", result.Error);
+                }
                 await Task.Delay(_processingInterval, stoppingToken);
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
@@ -81,7 +85,11 @@ public class OutboxProcessorService : BackgroundService
                 {
                     using var scope = _serviceScopeFactory.CreateScope();
                     var outboxService = scope.ServiceProvider.GetRequiredService<IOutboxService>();
-                    await outboxService.RetryFailedEventsAsync(stoppingToken);
+                    var result = await outboxService.RetryFailedEventsAsync(stoppingToken);
+                    if (result.IsFailure)
+                    {
+                        _logger.LogError("Failed to retry failed events: {Error}", result.Error);
+                    }
                 }
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)

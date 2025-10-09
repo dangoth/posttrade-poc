@@ -41,8 +41,8 @@ public class EventSerializerTests
         var result = await _serializer.SerializeAsync(domainEvent);
 
         Assert.NotNull(result);
-        Assert.Equal("TradeCreated", result.EventType);
-        Assert.Equal(1, result.SchemaVersion);
+        Assert.Equal("TradeCreated", result.Value!.EventType);
+        Assert.Equal(1, result.Value.SchemaVersion);
         _mockVersionManager.Verify(x => x.ConvertFromDomainEvent(domainEvent, 1), Times.Once);
     }
 
@@ -59,7 +59,7 @@ public class EventSerializerTests
 
         var result = await _serializer.SerializeAsync(domainEvent, 2);
 
-        Assert.Equal(2, result.SchemaVersion);
+        Assert.Equal(2, result.Value!.SchemaVersion);
         _mockVersionManager.Verify(x => x.ConvertFromDomainEvent(domainEvent, 2), Times.Once);
     }
 
@@ -76,19 +76,23 @@ public class EventSerializerTests
 
         var result = await _serializer.DeserializeAsync(serializedEvent);
 
-        Assert.Equal(domainEvent, result);
+        Assert.Equal(domainEvent, result.Value);
         _mockVersionManager.Verify(x => x.ConvertToDomainEvent(It.IsAny<IVersionedEventContract>()), Times.Once);
     }
 
     [Fact]
-    public async Task SerializeAsync_WithUnregisteredEventType_ThrowsException()
+    public async Task SerializeAsync_WithUnregisteredEventType_ReturnsFailureResult()
     {
         var domainEvent = CreateTestEvent();
         
         _mockVersionManager.Setup(x => x.GetLatestVersion("TradeCreated")).Returns(1);
         _mockVersionManager.Setup(x => x.GetContractType("TradeCreated", 1)).Returns((Type)null!);
 
-        await Assert.ThrowsAsync<InvalidOperationException>(() => _serializer.SerializeAsync(domainEvent));
+        var result = await _serializer.SerializeAsync(domainEvent);
+        
+        Assert.False(result.IsSuccess);
+        Assert.True(result.IsFailure);
+        Assert.Contains("No contract registered", result.Error);
     }
 
     private static TradeCreatedEvent CreateTestEvent()

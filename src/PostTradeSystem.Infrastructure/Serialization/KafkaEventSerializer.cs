@@ -1,5 +1,6 @@
 using PostTradeSystem.Core.Events;
 using PostTradeSystem.Core.Serialization;
+using PostTradeSystem.Core.Common;
 using PostTradeSystem.Core.Schemas;
 using PostTradeSystem.Infrastructure.Kafka;
 using System.Text;
@@ -17,10 +18,15 @@ public class KafkaEventSerializer
         _serializationService = serializationService;
     }
 
-    public async Task<KafkaMessage> SerializeForKafkaAsync(IDomainEvent domainEvent)
+    public async Task<Result<KafkaMessage>> SerializeForKafkaAsync(IDomainEvent domainEvent)
     {
-        var serializedEvent = await _eventSerializer.SerializeAsync(domainEvent);
+        var serializeResult = await _eventSerializer.SerializeAsync(domainEvent);
+        if (serializeResult.IsFailure)
+        {
+            return Result<KafkaMessage>.Failure($"Failed to serialize event for Kafka: {serializeResult.Error}");
+        }
         
+        var serializedEvent = serializeResult.Value!;
         var headers = KafkaHeaderUtility.CreateEventHeaders(
             serializedEvent.EventType,
             serializedEvent.SchemaVersion,
@@ -31,27 +37,36 @@ public class KafkaEventSerializer
             domainEvent.AggregateVersion,
             serializedEvent.Metadata);
 
-        return new KafkaMessage(
+        var kafkaMessage = new KafkaMessage(
             Key: domainEvent.AggregateId,
             Value: serializedEvent.Data,
             Headers: headers,
             Partition: CalculatePartition(domainEvent.AggregateId),
             Topic: GetTopicName(serializedEvent.EventType));
+            
+        return Result<KafkaMessage>.Success(kafkaMessage);
     }
 
-    public async Task<IDomainEvent> DeserializeFromKafka(KafkaMessage kafkaMessage)
+    public async Task<Result<IDomainEvent>> DeserializeFromKafka(KafkaMessage kafkaMessage)
     {
-        var eventType = KafkaHeaderUtility.GetHeaderValue(kafkaMessage.Headers, "event-type");
-        var version = int.Parse(KafkaHeaderUtility.GetHeaderValue(kafkaMessage.Headers, "event-version"));
-        var schemaId = KafkaHeaderUtility.GetHeaderValue(kafkaMessage.Headers, "schema-id");
-        var serializedAt = DateTime.Parse(KafkaHeaderUtility.GetHeaderValue(kafkaMessage.Headers, "serialized-at"));
+        try
+        {
+            var eventType = KafkaHeaderUtility.GetHeaderValue(kafkaMessage.Headers, "event-type");
+            var version = int.Parse(KafkaHeaderUtility.GetHeaderValue(kafkaMessage.Headers, "event-version"));
+            var schemaId = KafkaHeaderUtility.GetHeaderValue(kafkaMessage.Headers, "schema-id");
+            var serializedAt = DateTime.Parse(KafkaHeaderUtility.GetHeaderValue(kafkaMessage.Headers, "serialized-at"));
 
-        var metadata = KafkaHeaderUtility.ExtractMetadataHeaders(kafkaMessage.Headers);
+            var metadata = KafkaHeaderUtility.ExtractMetadataHeaders(kafkaMessage.Headers);
 
-        var serializedEvent = new SerializedEvent(
-            eventType, version, kafkaMessage.Value, schemaId, serializedAt, metadata);
+            var serializedEvent = new SerializedEvent(
+                eventType, version, kafkaMessage.Value, schemaId, serializedAt, metadata);
 
-        return await _eventSerializer.DeserializeAsync(serializedEvent);
+            return await _eventSerializer.DeserializeAsync(serializedEvent);
+        }
+        catch (Exception ex)
+        {
+            return Result<IDomainEvent>.Failure($"Failed to deserialize Kafka message: {ex.Message}");
+        }
     }
 
     public bool CanDeserialize(KafkaMessage kafkaMessage)

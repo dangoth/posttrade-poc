@@ -78,7 +78,12 @@ public class IdempotencyCleanupService : BackgroundService
 
             using var scope = _serviceScopeFactory.CreateScope();
             var eventStoreRepository = scope.ServiceProvider.GetRequiredService<IEventStoreRepository>();
-            await eventStoreRepository.CleanupExpiredIdempotencyKeysAsync(cancellationToken);
+            var result = await eventStoreRepository.CleanupExpiredIdempotencyKeysAsync(cancellationToken);
+            if (result.IsFailure)
+            {
+                _logger.LogError("Failed to cleanup expired idempotency keys: {Error}", result.Error);
+                throw new InvalidOperationException($"Cleanup failed: {result.Error}");
+            }
 
             _logger.LogInformation("Daily idempotency keys cleanup completed successfully");
         }

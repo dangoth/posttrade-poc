@@ -1,4 +1,5 @@
 using PostTradeSystem.Core.Messages;
+using PostTradeSystem.Core.Common;
 using PostTradeSystem.Infrastructure.Kafka;
 
 namespace PostTradeSystem.Api.Services;
@@ -14,22 +15,22 @@ public class TradeService
         _config = config;
     }
 
-    public async Task<object> ProduceEquityTradeAsync(EquityTradeMessage trade)
+    public async Task<Result<object>> ProduceEquityTradeAsync(EquityTradeMessage trade)
     {
         return await ProduceTradeAsync(trade, "Kafka:Topics:EquityTrades", "trades.equities", "equity");
     }
 
-    public async Task<object> ProduceOptionTradeAsync(OptionTradeMessage trade)
+    public async Task<Result<object>> ProduceOptionTradeAsync(OptionTradeMessage trade)
     {
         return await ProduceTradeAsync(trade, "Kafka:Topics:OptionTrades", "trades.options", "option");
     }
 
-    public async Task<object> ProduceFxTradeAsync(FxTradeMessage trade)
+    public async Task<Result<object>> ProduceFxTradeAsync(FxTradeMessage trade)
     {
         return await ProduceTradeAsync(trade, "Kafka:Topics:FxTrades", "trades.fx", "FX");
     }
 
-    private async Task<object> ProduceTradeAsync<T>(T trade, string topicConfigKey, string defaultTopic, string tradeType) 
+    private async Task<Result<object>> ProduceTradeAsync<T>(T trade, string topicConfigKey, string defaultTopic, string tradeType) 
         where T : TradeMessage
     {
         try
@@ -37,11 +38,19 @@ public class TradeService
             var topic = _config[topicConfigKey] ?? defaultTopic;
             var result = await _producer.ProduceAsync(topic, trade);
             
-            return CreateSuccessResponse(trade.TradeId, result);
+            if (result.IsSuccess)
+            {
+                var response = CreateSuccessResponse(trade.TradeId, result.Value!);
+                return Result<object>.Success(response);
+            }
+            else
+            {
+                return Result<object>.Failure($"Failed to produce message: {result.Error}");
+            }
         }
         catch (Exception ex)
         {
-            throw new InvalidOperationException($"Failed to produce {tradeType} trade: {ex.Message}", ex);
+            return Result<object>.Failure($"Failed to produce {tradeType} trade: {ex.Message}");
         }
     }
 

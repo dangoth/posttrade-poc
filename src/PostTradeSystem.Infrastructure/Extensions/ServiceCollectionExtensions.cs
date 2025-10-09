@@ -1,11 +1,13 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Options;
 using PostTradeSystem.Core.Schemas;
 using PostTradeSystem.Core.Services;
 using PostTradeSystem.Infrastructure.Data;
 using PostTradeSystem.Infrastructure.Repositories;
 using PostTradeSystem.Infrastructure.Services;
+using PostTradeSystem.Infrastructure.Configuration;
 
 namespace PostTradeSystem.Infrastructure.Extensions;
 
@@ -13,6 +15,9 @@ public static class ServiceCollectionExtensions
 {
     public static IServiceCollection AddInfrastructure(this IServiceCollection services, IConfiguration configuration)
     {
+        services.Configure<KafkaExactlyOnceConfiguration>(
+            configuration.GetSection(KafkaExactlyOnceConfiguration.SectionName));
+            
         services.AddSingleton<ITimeProvider, SystemTimeProvider>();
 
         services.AddDbContext<PostTradeDbContext>(options =>

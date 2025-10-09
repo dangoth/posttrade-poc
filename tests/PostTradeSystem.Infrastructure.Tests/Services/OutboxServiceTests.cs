@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Logging;
 using Moq;
+using PostTradeSystem.Core.Common;
 using PostTradeSystem.Core.Events;
 using PostTradeSystem.Core.Serialization;
 using PostTradeSystem.Infrastructure.Entities;
@@ -14,7 +15,7 @@ public class OutboxServiceTests
 {
     private readonly Mock<IOutboxRepository> _mockOutboxRepository;
     private readonly Mock<IKafkaProducerService> _mockKafkaProducer;
-    private readonly SerializationManagementService _realSerializationService;
+    private readonly ISerializationManagementService _realSerializationService;
     private readonly Mock<ILogger<OutboxService>> _mockLogger;
     private readonly OutboxService _outboxService;
 
@@ -26,17 +27,15 @@ public class OutboxServiceTests
         _mockKafkaProducer = new Mock<IKafkaProducerService>();
         _mockKafkaProducer
             .Setup(x => x.ProduceAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<Dictionary<string, string>>(), It.IsAny<CancellationToken>()))
-            .ThrowsAsync(new TimeoutException("Kafka connection timeout"));
+            .Returns(Task.FromResult(Result<Confluent.Kafka.DeliveryResult<string, string>>.Failure("Kafka connection timeout")));
             
-        _realSerializationService = new SerializationManagementService(
-            Mock.Of<PostTradeSystem.Core.Serialization.EventSerializationRegistry>(),
-            Mock.Of<PostTradeSystem.Core.Schemas.ISchemaRegistry>(),
-            Mock.Of<PostTradeSystem.Core.Schemas.JsonSchemaValidator>(),
-            Mock.Of<PostTradeSystem.Core.Services.ITradeRiskService>());
+        var mockSerializationService = new Mock<ISerializationManagementService>();
+        mockSerializationService.Setup(x => x.SerializeAsync(It.IsAny<IDomainEvent>(), It.IsAny<int?>()))
+            .ReturnsAsync(Result<SerializedEvent>.Success(new SerializedEvent("TradeCreated", 1, "{}", "schema1", DateTime.UtcNow, new Dictionary<string, string>())));
+        
+        _realSerializationService = mockSerializationService.Object;
             
-        Console.WriteLine("[DEBUG] Initializing SerializationManagementService...");
-        _realSerializationService.InitializeAsync().GetAwaiter().GetResult();
-        Console.WriteLine($"[DEBUG] TradeCreated latest schema version: {_realSerializationService.GetLatestSchemaVersion("TradeCreated")}");
+        // SerializationService is now mocked, no need to initialize
             
         _mockLogger = new Mock<ILogger<OutboxService>>();
 
@@ -68,12 +67,18 @@ public class OutboxServiceTests
             "TestService",
             new Dictionary<string, object>());
 
+        // Setup mock before calling the method
+        _mockOutboxRepository.Setup(x => x.SaveOutboxEventAsync(It.IsAny<OutboxEventEntity>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Result.Success());
+
         // Act
         Console.WriteLine($"[DEBUG] Saving event to outbox: {domainEvent.EventId}");
-        await _outboxService.SaveEventToOutboxAsync(domainEvent, "events.trades", "partition-key");
+        var result = await _outboxService.SaveEventToOutboxAsync(domainEvent, "events.trades", "partition-key");
         Console.WriteLine("[DEBUG] SaveEventToOutboxAsync completed");
+        
+        // Assert result is successful
+        Assert.True(result.IsSuccess);
 
-        // Assert
         _mockOutboxRepository.Verify(x => x.SaveOutboxEventAsync(
             It.Is<OutboxEventEntity>(e => 
                 e.EventId == domainEvent.EventId &&
@@ -109,12 +114,18 @@ public class OutboxServiceTests
 
         _mockOutboxRepository
             .Setup(x => x.GetUnprocessedEventsAsync(It.IsAny<int>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(outboxEvents);
+            .ReturnsAsync(Result<IEnumerable<OutboxEventEntity>>.Success(outboxEvents));
+
+        // Setup mock returns for repository methods before calling the method
+        _mockOutboxRepository.Setup(x => x.MoveToDeadLetterAsync(It.IsAny<long>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Result.Success());
 
         // Act
-        await _outboxService.ProcessOutboxEventsAsync();
+        var result = await _outboxService.ProcessOutboxEventsAsync();
+        
+        // Assert result is successful
+        Assert.True(result.IsSuccess);
 
-        // Assert
         // Since Kafka connection fails (timeout), the event should be moved to dead letter queue after retry attempts
         _mockOutboxRepository.Verify(x => x.MoveToDeadLetterAsync(1, 
             It.Is<string>(reason => reason.Contains("Failed after retry attempts with exponential backoff")), 

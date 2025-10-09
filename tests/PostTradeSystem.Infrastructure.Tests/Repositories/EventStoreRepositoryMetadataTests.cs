@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Logging;
 using Moq;
+using PostTradeSystem.Core.Common;
 using PostTradeSystem.Core.Events;
 using PostTradeSystem.Core.Schemas;
 using PostTradeSystem.Core.Serialization;
@@ -60,12 +61,14 @@ public class EventStoreRepositoryMetadataTests : SqlServerTestBase
 
         var mockEvent = new Mock<IDomainEvent>();
         _mockSerializationService.Setup(s => s.Deserialize(It.IsAny<SerializedEvent>()))
-            .Returns(mockEvent.Object);
+            .Returns(Result<IDomainEvent>.Success(mockEvent.Object));
 
         // Act
-        var events = await _repository.GetEventsAsync(aggregateId);
+        var eventsResult = await _repository.GetEventsAsync(aggregateId);
 
         // Assert
+        Assert.True(eventsResult.IsSuccess);
+        var events = eventsResult.Value!;
         Assert.Single(events);
         // Verification removed - using real serialization service
         
@@ -106,7 +109,7 @@ public class EventStoreRepositoryMetadataTests : SqlServerTestBase
         var events = await _repository.GetEventsAsync(aggregateId);
 
         // Assert
-        Assert.Empty(events);
+        Assert.Empty(events.Value!);
         
         // Verify event was moved to dead letter queue
         _mockOutboxService.Verify(o => o.SaveEventToOutboxAsync(
@@ -150,12 +153,14 @@ public class EventStoreRepositoryMetadataTests : SqlServerTestBase
 
         var mockEvent = new Mock<IDomainEvent>();
         _mockSerializationService.Setup(s => s.Deserialize(It.IsAny<SerializedEvent>()))
-            .Returns(mockEvent.Object);
+            .Returns(Result<IDomainEvent>.Success(mockEvent.Object));
 
         // Act
-        var events = await _repository.GetEventsAsync(aggregateId);
+        var eventsResult = await _repository.GetEventsAsync(aggregateId);
 
         // Assert
+        Assert.True(eventsResult.IsSuccess);
+        var events = eventsResult.Value!;
         Assert.Single(events);
         _mockSerializationService.Verify(s => s.Deserialize(It.Is<SerializedEvent>(se => se.SchemaVersion == 1)), Times.Once);
         
@@ -196,7 +201,7 @@ public class EventStoreRepositoryMetadataTests : SqlServerTestBase
         var events = await _repository.GetEventsAsync(aggregateId);
 
         // Assert
-        Assert.Empty(events);
+        Assert.Empty(events.Value!);
         
         // Verify event was moved to dead letter queue
         _mockOutboxService.Verify(o => o.SaveEventToOutboxAsync(
@@ -229,13 +234,13 @@ public class EventStoreRepositoryMetadataTests : SqlServerTestBase
         await Context.SaveChangesAsync();
 
         _mockSerializationService.Setup(s => s.Deserialize(It.IsAny<SerializedEvent>()))
-            .Throws(new InvalidOperationException("Deserialization failed"));
+            .Returns(Result<IDomainEvent>.Failure("Deserialization failed"));
 
         // Act
         var events = await _repository.GetEventsAsync(aggregateId);
 
         // Assert
-        Assert.Empty(events);
+        Assert.Empty(events.Value!);
         
         // Verify event was moved to dead letter queue
         _mockOutboxService.Verify(o => o.SaveEventToOutboxAsync(
@@ -287,7 +292,7 @@ public class EventStoreRepositoryMetadataTests : SqlServerTestBase
         var events = await repositoryWithoutOutbox.GetEventsAsync(aggregateId);
 
         // Assert
-        Assert.Empty(events);
+        Assert.Empty(events.Value!);
         
         // Verify no outbox service calls
         _mockOutboxService.Verify(o => o.SaveEventToOutboxAsync(

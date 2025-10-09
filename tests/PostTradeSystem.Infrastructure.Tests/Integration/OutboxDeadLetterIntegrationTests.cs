@@ -1,8 +1,7 @@
-using Microsoft.Extensions.DependencyInjection;
+using Confluent.Kafka;
 using Microsoft.Extensions.Logging;
 using Moq;
-using PostTradeSystem.Core.Serialization;
-using PostTradeSystem.Core.Services;
+using PostTradeSystem.Core.Common;
 using PostTradeSystem.Infrastructure.Kafka;
 using PostTradeSystem.Infrastructure.Repositories;
 using PostTradeSystem.Infrastructure.Services;
@@ -56,8 +55,8 @@ public class OutboxDeadLetterIntegrationTests : IntegrationTestBase
 
         // Verify event is in outbox
         var unprocessedEvents = await _outboxRepository.GetUnprocessedEventsAsync();
-        Assert.Single(unprocessedEvents);
-        var outboxEvent = unprocessedEvents.First();
+        Assert.Single(unprocessedEvents.Value!);
+        var outboxEvent = unprocessedEvents.Value!.First();
         Assert.False(outboxEvent.IsDeadLettered);
         Assert.Equal(0, outboxEvent.RetryCount);
 
@@ -74,16 +73,18 @@ public class OutboxDeadLetterIntegrationTests : IntegrationTestBase
 
         // Verify it appears in dead letter queries
         var deadLetteredEvents = await _outboxService.GetDeadLetteredEventsAsync(100);
-        Assert.Single(deadLetteredEvents);
-        Assert.Equal(outboxEvent.EventId, deadLetteredEvents.First().EventId);
+        Assert.Single(deadLetteredEvents.Value!);
+        Assert.Equal(outboxEvent.EventId, deadLetteredEvents.Value!.First().EventId);
 
         // Verify it doesn't appear in unprocessed queries
-        var unprocessedAfterDlq = await _outboxRepository.GetUnprocessedEventsAsync();
+        var unprocessedAfterDlqResult = await _outboxRepository.GetUnprocessedEventsAsync();
+        Assert.True(unprocessedAfterDlqResult.IsSuccess);
+        var unprocessedAfterDlq = unprocessedAfterDlqResult.Value!;
         Assert.Empty(unprocessedAfterDlq);
 
         // Verify count is correct
         var dlqCount = await _outboxService.GetDeadLetteredEventCountAsync();
-        Assert.Equal(1, dlqCount);
+        Assert.Equal(1, dlqCount.Value);
     }
 
     [Fact]
@@ -94,7 +95,7 @@ public class OutboxDeadLetterIntegrationTests : IntegrationTestBase
         await _outboxService.SaveEventToOutboxAsync(domainEvent, "trades", "partition1");
 
         var unprocessedEvents = await _outboxRepository.GetUnprocessedEventsAsync();
-        var outboxEvent = unprocessedEvents.First();
+        var outboxEvent = unprocessedEvents.Value!.First();
 
         // Move to dead letter manually
         await _outboxRepository.MoveToDeadLetterAsync(outboxEvent.Id, "Test dead letter");
@@ -122,7 +123,7 @@ public class OutboxDeadLetterIntegrationTests : IntegrationTestBase
             It.IsAny<string>(), 
             It.IsAny<Dictionary<string, string>>(), 
             It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new Confluent.Kafka.DeliveryResult<string, string>());
+            .ReturnsAsync(Result<DeliveryResult<string, string>>.Success(new DeliveryResult<string, string>()));
 
         // Act - Process the event successfully
         await _outboxService.ProcessOutboxEventsAsync();
@@ -156,10 +157,13 @@ public class OutboxDeadLetterIntegrationTests : IntegrationTestBase
 
         foreach (var evt in events)
         {
-            await _outboxService.SaveEventToOutboxAsync(evt, "trades", "partition1");
+            var saveResult = await _outboxService.SaveEventToOutboxAsync(evt, "trades", "partition1");
+        Assert.True(saveResult.IsSuccess);
         }
 
-        var unprocessedEvents = await _outboxRepository.GetUnprocessedEventsAsync();
+        var unprocessedEventsResult = await _outboxRepository.GetUnprocessedEventsAsync();
+        Assert.True(unprocessedEventsResult.IsSuccess);
+        var unprocessedEvents = unprocessedEventsResult.Value!;
         Assert.Equal(3, unprocessedEvents.Count());
 
         // Setup Kafka to fail for all events
@@ -169,22 +173,28 @@ public class OutboxDeadLetterIntegrationTests : IntegrationTestBase
             It.IsAny<string>(), 
             It.IsAny<Dictionary<string, string>>(), 
             It.IsAny<CancellationToken>()))
-            .ThrowsAsync(new Exception("Kafka failure"));
+            .ReturnsAsync(Result<DeliveryResult<string, string>>.Failure("Kafka failure"));
 
         // Act - Process events (should fail with retries and move to DLQ)
         // With the new RetryService, all retries happen within ProcessOutboxEventsAsync
-        await _outboxService.ProcessOutboxEventsAsync();
+        var processResult = await _outboxService.ProcessOutboxEventsAsync();
+        Assert.True(processResult.IsSuccess);
 
         // Assert - All should be dead lettered
-        var dlqCount = await _outboxService.GetDeadLetteredEventCountAsync();
+        var dlqCountResult = await _outboxService.GetDeadLetteredEventCountAsync();
+        Assert.True(dlqCountResult.IsSuccess);
+        var dlqCount = dlqCountResult.Value;
         Assert.Equal(3, dlqCount);
 
-        var deadLetteredEvents = await _outboxService.GetDeadLetteredEventsAsync(100);
+        var deadLetteredEventsResult = await _outboxService.GetDeadLetteredEventsAsync(100);
+        Assert.True(deadLetteredEventsResult.IsSuccess);
+        var deadLetteredEvents = deadLetteredEventsResult.Value!;
         Assert.Equal(3, deadLetteredEvents.Count());
 
         // Act - Reprocess one event
         var firstDeadLetter = deadLetteredEvents.First();
-        await _outboxService.ReprocessDeadLetteredEventAsync(firstDeadLetter.Id);
+        var reprocessResult = await _outboxService.ReprocessDeadLetteredEventAsync(firstDeadLetter.Id);
+        Assert.True(reprocessResult.IsSuccess);
 
         // Setup Kafka to succeed for reprocessed events
         _mockKafkaProducer.Setup(p => p.ProduceAsync(
@@ -193,13 +203,13 @@ public class OutboxDeadLetterIntegrationTests : IntegrationTestBase
             It.IsAny<string>(), 
             It.IsAny<Dictionary<string, string>>(), 
             It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new Confluent.Kafka.DeliveryResult<string, string>());
+            .ReturnsAsync(Result<DeliveryResult<string, string>>.Success(new DeliveryResult<string, string>()));
 
         await _outboxService.ProcessOutboxEventsAsync();
 
         // Assert - One should be processed, two still dead lettered
         var finalDlqCount = await _outboxService.GetDeadLetteredEventCountAsync();
-        Assert.Equal(2, finalDlqCount);
+        Assert.Equal(2, finalDlqCount.Value);
 
         var processedEvent = await Context.OutboxEvents.FindAsync(firstDeadLetter.Id);
         Assert.True(processedEvent!.IsProcessed);

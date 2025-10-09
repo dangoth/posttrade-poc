@@ -91,8 +91,8 @@ public class OutboxRepositoryDlqTests : SqlServerTestBase
         var deadLetteredEvents = await _repository.GetDeadLetteredEventsAsync();
 
         // Assert
-        Assert.Single(deadLetteredEvents);
-        Assert.Equal(deadLetteredEvent.EventId, deadLetteredEvents.First().EventId);
+        Assert.Single(deadLetteredEvents.Value!);
+        Assert.Equal(deadLetteredEvent.EventId, deadLetteredEvents.Value!.First().EventId);
     }
 
     [Fact]
@@ -158,7 +158,7 @@ public class OutboxRepositoryDlqTests : SqlServerTestBase
         var count = await _repository.GetDeadLetteredEventCountAsync();
 
         // Assert
-        Assert.Equal(2, count);
+        Assert.Equal(2, count.Value);
     }
 
     [Fact]
@@ -177,8 +177,8 @@ public class OutboxRepositoryDlqTests : SqlServerTestBase
         var unprocessedEvents = await _repository.GetUnprocessedEventsAsync();
 
         // Assert
-        Assert.Single(unprocessedEvents);
-        Assert.Equal(unprocessedEvent.EventId, unprocessedEvents.First().EventId);
+        Assert.Single(unprocessedEvents.Value!);
+        Assert.Equal(unprocessedEvent.EventId, unprocessedEvents.Value!.First().EventId);
     }
 
     [Fact]
@@ -195,8 +195,8 @@ public class OutboxRepositoryDlqTests : SqlServerTestBase
         var retryableEvents = await _repository.GetFailedEventsForRetryAsync(TimeSpan.Zero, maxRetryCount: 3);
 
         // Assert
-        Assert.Single(retryableEvents);
-        Assert.Equal(retryableEvent.EventId, retryableEvents.First().EventId);
+        Assert.Single(retryableEvents.Value!);
+        Assert.Equal(retryableEvent.EventId, retryableEvents.Value!.First().EventId);
     }
 
     private OutboxEventEntity CreateOutboxEvent(

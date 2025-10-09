@@ -17,20 +17,21 @@ public static class OutboxAdminEndpoints
             int? limit,
             CancellationToken cancellationToken) =>
         {
-            try
+            var batchSize = Math.Min(limit ?? 100, 1000);
+            var result = await outboxService.GetDeadLetteredEventsAsync(batchSize, cancellationToken);
+            
+            if (result.IsSuccess)
             {
-                var batchSize = Math.Min(limit ?? 100, 1000);
-                var deadLetters = await outboxService.GetDeadLetteredEventsAsync(batchSize, cancellationToken);
                 return Results.Ok(new 
                 { 
-                    Events = deadLetters,
-                    TotalReturned = deadLetters.Count(),
+                    Events = result.Value,
+                    TotalReturned = result.Value!.Count(),
                     RequestedLimit = batchSize
                 });
             }
-            catch (Exception ex)
+            else
             {
-                return Results.Problem($"Error retrieving dead lettered events: {ex.Message}");
+                return Results.Problem($"Error retrieving dead lettered events: {result.Error}");
             }
         })
         .WithName("GetDeadLetteredEvents")
@@ -40,14 +41,15 @@ public static class OutboxAdminEndpoints
         // Get dead lettered event count
         group.MapGet("/dead-letters/count", async (IOutboxService outboxService, CancellationToken cancellationToken) =>
         {
-            try
+            var result = await outboxService.GetDeadLetteredEventCountAsync(cancellationToken);
+            
+            if (result.IsSuccess)
             {
-                var count = await outboxService.GetDeadLetteredEventCountAsync(cancellationToken);
-                return Results.Ok(new { Count = count });
+                return Results.Ok(new { Count = result.Value });
             }
-            catch (Exception ex)
+            else
             {
-                return Results.Problem($"Error getting dead lettered event count: {ex.Message}");
+                return Results.Problem($"Error getting dead lettered event count: {result.Error}");
             }
         })
         .WithName("GetDeadLetteredEventCount")
@@ -60,14 +62,15 @@ public static class OutboxAdminEndpoints
             IOutboxService outboxService, 
             CancellationToken cancellationToken) =>
         {
-            try
+            var result = await outboxService.ReprocessDeadLetteredEventAsync(eventId, cancellationToken);
+            
+            if (result.IsSuccess)
             {
-                await outboxService.ReprocessDeadLetteredEventAsync(eventId, cancellationToken);
                 return Results.Ok(new { Message = $"Event {eventId} has been reset for reprocessing" });
             }
-            catch (Exception ex)
+            else
             {
-                return Results.Problem($"Error reprocessing event {eventId}: {ex.Message}");
+                return Results.Problem($"Error reprocessing event {eventId}: {result.Error}");
             }
         })
         .WithName("ReprocessDeadLetteredEvent")
@@ -80,44 +83,44 @@ public static class OutboxAdminEndpoints
             int? limit,
             CancellationToken cancellationToken) =>
         {
-            try
+            var batchSize = Math.Min(limit ?? 1000, 1000); // Default and max 1000 for bulk operations
+            var deadLettersResult = await outboxService.GetDeadLetteredEventsAsync(batchSize, cancellationToken);
+            
+            if (deadLettersResult.IsFailure)
             {
-                var batchSize = Math.Min(limit ?? 1000, 1000); // Default and max 1000 for bulk operations
-                var deadLetters = await outboxService.GetDeadLetteredEventsAsync(batchSize, cancellationToken);
-                var reprocessedCount = 0;
-                var failedCount = 0;
-                var failures = new List<object>();
-                
-                foreach (var deadLetter in deadLetters)
+                return Results.Problem($"Error retrieving dead lettered events: {deadLettersResult.Error}");
+            }
+            
+            var deadLetters = deadLettersResult.Value!;
+            var reprocessedCount = 0;
+            var failedCount = 0;
+            var failures = new List<object>();
+            
+            foreach (var deadLetter in deadLetters)
+            {
+                var reprocessResult = await outboxService.ReprocessDeadLetteredEventAsync(deadLetter.Id, cancellationToken);
+                if (reprocessResult.IsSuccess)
                 {
-                    try
-                    {
-                        await outboxService.ReprocessDeadLetteredEventAsync(deadLetter.Id, cancellationToken);
-                        reprocessedCount++;
-                    }
-                    catch (Exception ex)
-                    {
-                        failedCount++;
-                        failures.Add(new { 
-                            EventId = deadLetter.Id, 
-                            Error = ex.Message 
-                        });
-                    }
+                    reprocessedCount++;
                 }
-                
-                var response = new { 
-                    Message = $"Processed {deadLetters.Count()} events: {reprocessedCount} succeeded, {failedCount} failed",
-                    ReprocessedCount = reprocessedCount,
-                    FailedCount = failedCount,
-                    Failures = failures
-                };
-                
-                return Results.Ok(response);
+                else
+                {
+                    failedCount++;
+                    failures.Add(new { 
+                        EventId = deadLetter.Id, 
+                        Error = reprocessResult.Error 
+                    });
+                }
             }
-            catch (Exception ex)
-            {
-                return Results.Problem($"Error bulk reprocessing dead lettered events: {ex.Message}");
-            }
+            
+            var response = new { 
+                Message = $"Processed {deadLetters.Count()} events: {reprocessedCount} succeeded, {failedCount} failed",
+                ReprocessedCount = reprocessedCount,
+                FailedCount = failedCount,
+                Failures = failures
+            };
+            
+            return Results.Ok(response);
         })
         .WithName("BulkReprocessDeadLetteredEvents")
         .WithSummary("Reprocess all dead lettered events")
@@ -126,22 +129,22 @@ public static class OutboxAdminEndpoints
         // Get outbox statistics
         group.MapGet("/statistics", async (IOutboxService outboxService, CancellationToken cancellationToken) =>
         {
-            try
+            var result = await outboxService.GetDeadLetteredEventCountAsync(cancellationToken);
+            
+            if (result.IsSuccess)
             {
-                var deadLetterCount = await outboxService.GetDeadLetteredEventCountAsync(cancellationToken);
-                
                 // for now just basic stats, extendable
                 var statistics = new
                 {
-                    DeadLetteredCount = deadLetterCount,
+                    DeadLetteredCount = result.Value,
                     Timestamp = DateTime.UtcNow
                 };
                 
                 return Results.Ok(statistics);
             }
-            catch (Exception ex)
+            else
             {
-                return Results.Problem($"Error retrieving outbox statistics: {ex.Message}");
+                return Results.Problem($"Error retrieving outbox statistics: {result.Error}");
             }
         })
         .WithName("GetOutboxStatistics")

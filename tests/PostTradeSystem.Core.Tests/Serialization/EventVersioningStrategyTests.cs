@@ -46,8 +46,8 @@ public class SerializationManagementServiceTests
         var serialized = await _serializationService.SerializeAsync(domainEvent);
 
         serialized.Should().NotBeNull();
-        serialized.EventType.Should().Be("TradeCreated");
-        serialized.SchemaVersion.Should().Be(2); // Should use latest version
+        serialized.Value!.EventType.Should().Be("TradeCreated");
+        serialized.Value.SchemaVersion.Should().Be(2); // Should use latest version
     }
 
     [Fact]

@@ -1,6 +1,7 @@
 using PostTradeSystem.Core.Events;
 using PostTradeSystem.Core.Schemas;
 using PostTradeSystem.Core.Services;
+using PostTradeSystem.Core.Common;
 
 namespace PostTradeSystem.Core.Serialization;
 
@@ -23,12 +24,12 @@ public class EventSerializationOrchestrator
         _tradeRiskService = tradeRiskService;
     }
 
-    public async Task<SerializedEvent> SerializeAsync<T>(T domainEvent, int? targetSchemaVersion = null) where T : IDomainEvent
+    public async Task<Result<SerializedEvent>> SerializeAsync<T>(T domainEvent, int? targetSchemaVersion = null) where T : IDomainEvent
     {
         return await _eventSerializer.SerializeAsync(domainEvent, targetSchemaVersion);
     }
 
-    public async Task<IDomainEvent> DeserializeAsync(SerializedEvent serializedEvent)
+    public async Task<Result<IDomainEvent>> DeserializeAsync(SerializedEvent serializedEvent)
     {
         return await _eventSerializer.DeserializeAsync(serializedEvent);
     }
@@ -52,7 +53,13 @@ public class EventSerializationOrchestrator
     {
         try
         {
-            var serializedEvent = await SerializeAsync(domainEvent, targetVersion);
+            var serializeResult = await SerializeAsync(domainEvent, targetVersion);
+            if (serializeResult.IsFailure)
+            {
+                return new ValidationResult(false, $"Serialization failed: {serializeResult.Error}");
+            }
+            
+            var serializedEvent = serializeResult.Value!;
             return await ValidateEventDataAsync(serializedEvent.EventType, serializedEvent.Data, serializedEvent.SchemaVersion);
         }
         catch (Exception ex)

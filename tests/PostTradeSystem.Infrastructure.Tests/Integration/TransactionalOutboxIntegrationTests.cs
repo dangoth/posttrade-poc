@@ -57,9 +57,9 @@ public class TransactionalOutboxIntegrationTests : IntegrationTestBase
 
         // Assert - Event should be saved to event store
         var savedEvents = await EventStoreRepository.GetEventsAsync(tradeEvent.AggregateId);
-        savedEvents.Should().HaveCount(1);
+        savedEvents.Value.Should().HaveCount(1);
         
-        var savedEvent = savedEvents.First() as TradeCreatedEvent;
+        var savedEvent = savedEvents.Value!.First() as TradeCreatedEvent;
         savedEvent.Should().NotBeNull();
         savedEvent!.AggregateId.Should().Be("TRADE-001");
         savedEvent.TraderId.Should().Be("TRADER-001");
@@ -115,17 +115,15 @@ public class TransactionalOutboxIntegrationTests : IntegrationTestBase
 
         var partitionKey = "TRADER-002:INST-002";
 
-        // Act & Assert - Should throw and rollback transaction
-        var exception = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
-        {
-            await failingEventStoreRepository.SaveEventsAsync(
-                tradeEvent.AggregateId,
-                partitionKey,
-                new[] { tradeEvent },
-                0);
-        });
+        // Act & Assert - Should return failure result and rollback transaction
+        var result = await failingEventStoreRepository.SaveEventsAsync(
+            tradeEvent.AggregateId,
+            partitionKey,
+            new[] { tradeEvent },
+            0);
 
-        exception.Message.Should().Be("Simulated outbox failure");
+        result.IsSuccess.Should().BeFalse();
+        result.Error.Should().Contain("Simulated outbox failure");
 
         // Assert - Both event store and outbox should be empty
         var context = Context;
@@ -183,7 +181,7 @@ public class TransactionalOutboxIntegrationTests : IntegrationTestBase
 
         // Assert - Should only have one event in both stores
         var savedEvents = await EventStoreRepository.GetEventsAsync(tradeEvent.AggregateId);
-        savedEvents.Should().HaveCount(1);
+        savedEvents.Value.Should().HaveCount(1);
 
         var context = Context;
         var outboxEvents = await context.OutboxEvents
@@ -222,15 +220,16 @@ public class TransactionalOutboxIntegrationTests : IntegrationTestBase
         var serializedEvent = await SerializationService.SerializeAsync(tradeEvent);
 
         // Assert
-        serializedEvent.Should().NotBeNull();
-        serializedEvent.Data.Should().NotBeNullOrEmpty();
-        serializedEvent.SchemaVersion.Should().Be(2);
+        serializedEvent.IsSuccess.Should().BeTrue();
+        serializedEvent.Value!.Data.Should().NotBeNullOrEmpty();
+        serializedEvent.Value.SchemaVersion.Should().Be(2);
 
-        var isValid = SchemaValidator.ValidateMessage("TradeCreatedEvent", serializedEvent.Data, serializedEvent.SchemaVersion);
+        var isValid = SchemaValidator.ValidateMessage("TradeCreatedEvent", serializedEvent.Value.Data, serializedEvent.Value.SchemaVersion);
         isValid.Should().BeTrue();
 
-        var deserializedEvent = SerializationService.Deserialize(serializedEvent);
-        deserializedEvent.Should().NotBeNull();
+        var deserializeResult = SerializationService.Deserialize(serializedEvent.Value);
+        deserializeResult.IsSuccess.Should().BeTrue();
+        var deserializedEvent = deserializeResult.Value!;
         deserializedEvent.Should().BeOfType<TradeCreatedEvent>();
         
         var deserializedTradeEvent = (TradeCreatedEvent)deserializedEvent;
@@ -299,8 +298,9 @@ public class TransactionalOutboxIntegrationTests : IntegrationTestBase
             DateTime.UtcNow,
             new Dictionary<string, string>());
 
-        var deserializedEvent = SerializationService.Deserialize(serializedEvent);
-        deserializedEvent.Should().NotBeNull();
+        var deserializeResult = SerializationService.Deserialize(serializedEvent);
+        deserializeResult.IsSuccess.Should().BeTrue();
+        var deserializedEvent = deserializeResult.Value!;
         deserializedEvent.Should().BeOfType<TradeCreatedEvent>();
     }
 }
