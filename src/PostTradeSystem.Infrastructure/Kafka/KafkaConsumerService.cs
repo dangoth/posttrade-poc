@@ -252,6 +252,13 @@ public class KafkaConsumerService : BackgroundService
             var eventStoreRepository = scope.ServiceProvider.GetRequiredService<IEventStoreRepository>();
             
             var idempotencyResult = await eventStoreRepository.CheckIdempotencyAsync(messageKey, requestHash);
+            if (idempotencyResult.IsFailure)
+            {
+                _logger.LogError("Failed to check idempotency for key {MessageKey}: {Error}", messageKey, idempotencyResult.Error);
+                return false;
+            }
+            
+            idempotencyResult = await eventStoreRepository.CheckIdempotencyAsync(messageKey, requestHash);
             if (idempotencyResult.IsSuccess && idempotencyResult.Value)
             {
                 _logger.LogInformation("Duplicate message detected, skipping: {MessageKey}", messageKey);
@@ -461,32 +468,24 @@ public class KafkaConsumerService : BackgroundService
 
     private string CreatePartitionKey(object envelope, string messageType)
     {
-        var envelopeType = envelope.GetType();
-        if (envelopeType.IsGenericType && envelopeType.GetGenericTypeDefinition() == typeof(TradeMessageEnvelope<>))
+        return envelope switch
         {
-            var payloadProperty = envelopeType.GetProperty("Payload");
-            if (payloadProperty?.GetValue(envelope) is TradeMessage payload)
-            {
-                return payload.GetPartitionKey();
-            }
-        }
-        
-        return $"unknown:{messageType}";
+            TradeMessageEnvelope<EquityTradeMessage> eq => TradePropertyMapper.CreatePartitionKey(eq.Payload.TraderId, eq.Payload.InstrumentId),
+            TradeMessageEnvelope<FxTradeMessage> fx => TradePropertyMapper.CreatePartitionKey(fx.Payload.TraderId, fx.Payload.InstrumentId),
+            TradeMessageEnvelope<OptionTradeMessage> opt => TradePropertyMapper.CreatePartitionKey(opt.Payload.TraderId, opt.Payload.InstrumentId),
+            _ => $"unknown:{messageType}"
+        };
     }
 
     private string GetMessageId(object envelope)
     {
-        var envelopeType = envelope.GetType();
-        if (envelopeType.IsGenericType && envelopeType.GetGenericTypeDefinition() == typeof(TradeMessageEnvelope<>))
+        return envelope switch
         {
-            var messageIdProperty = envelopeType.GetProperty("MessageId");
-            if (messageIdProperty?.GetValue(envelope) is string messageId)
-            {
-                return messageId;
-            }
-        }
-        
-        return "Unknown";
+            TradeMessageEnvelope<EquityTradeMessage> eq => eq.MessageId,
+            TradeMessageEnvelope<FxTradeMessage> fx => fx.MessageId,
+            TradeMessageEnvelope<OptionTradeMessage> opt => opt.MessageId,
+            _ => "Unknown"
+        };
     }
 
     public override void Dispose()
