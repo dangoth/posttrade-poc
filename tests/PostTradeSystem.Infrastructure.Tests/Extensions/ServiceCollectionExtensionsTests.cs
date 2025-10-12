@@ -43,7 +43,7 @@ public class ServiceCollectionExtensionsTests : IntegrationTestBase
         services.Should().Contain(s => s.ServiceType == typeof(PostTradeSystem.Core.Serialization.EventSerializationRegistry));
         services.Should().Contain(s => s.ServiceType == typeof(PostTradeSystem.Core.Serialization.ISerializationManagementService));
         services.Should().Contain(s => s.ServiceType == typeof(PostTradeSystem.Core.Schemas.ISchemaRegistry));
-        services.Should().Contain(s => s.ServiceType == typeof(PostTradeSystem.Core.Schemas.JsonSchemaValidator));
+        services.Should().Contain(s => s.ServiceType == typeof(PostTradeSystem.Core.Schemas.IJsonSchemaValidator));
         services.Should().Contain(s => s.ServiceType == typeof(Func<string, string, IEnumerable<PostTradeSystem.Core.Events.IDomainEvent>, TradeAggregate>));
     }
 
@@ -61,7 +61,6 @@ public class ServiceCollectionExtensionsTests : IntegrationTestBase
 
         services.AddInfrastructure(configuration);
 
-        // Verify DbContext is registered with correct lifetime
         var dbContextDescriptor = services.FirstOrDefault(s => s.ServiceType == typeof(PostTradeDbContext));
         dbContextDescriptor.Should().NotBeNull();
         dbContextDescriptor!.Lifetime.Should().Be(ServiceLifetime.Scoped);

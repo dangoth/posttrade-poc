@@ -31,7 +31,7 @@ public static class SerializationServiceExtensions
         services.AddSingleton<ISerializationManagementService, SerializationManagementService>();
         
         // Schema services - registered by infrastructure
-        services.AddSingleton<JsonSchemaValidator>();
+        services.AddSingleton<IJsonSchemaValidator, JsonSchemaValidator>();
         
         // Event serializer - uses the management service internally for backward compatibility
         services.AddSingleton<IEventSerializer, ManagedEventSerializer>();

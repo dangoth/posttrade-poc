@@ -11,14 +11,14 @@ public class EventSerializerTests
 {
     private readonly Mock<IEventVersionManager> _mockVersionManager;
     private readonly Mock<ISchemaRegistry> _mockSchemaRegistry;
-    private readonly Mock<JsonSchemaValidator> _mockValidator;
+    private readonly Mock<IJsonSchemaValidator> _mockValidator;
     private readonly EventSerializer _serializer;
 
     public EventSerializerTests()
     {
         _mockVersionManager = new Mock<IEventVersionManager>();
         _mockSchemaRegistry = new Mock<ISchemaRegistry>();
-        _mockValidator = new Mock<JsonSchemaValidator>();
+        _mockValidator = new Mock<IJsonSchemaValidator>();
 
         _serializer = new EventSerializer(
             _mockVersionManager.Object,

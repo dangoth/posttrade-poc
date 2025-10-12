@@ -8,6 +8,7 @@ using PostTradeSystem.Infrastructure.Data;
 using PostTradeSystem.Infrastructure.Repositories;
 using PostTradeSystem.Infrastructure.Services;
 using PostTradeSystem.Infrastructure.Configuration;
+using PostTradeSystem.Infrastructure.Handlers;
 
 namespace PostTradeSystem.Infrastructure.Extensions;
 
@@ -48,7 +49,12 @@ public static class ServiceCollectionExtensions
         services.AddScoped<Func<string, string, IEnumerable<Core.Events.IDomainEvent>, Core.Aggregates.TradeAggregate>>(
             provider => (id, partitionKey, events) => Core.Aggregates.TradeAggregate.FromHistory(id, partitionKey, events));
         
-        services.AddSingleton<JsonSchemaValidator>(provider =>
+        services.AddScoped<Core.Handlers.ICommandHandler<Core.Commands.CreateTradeCommand>, CreateTradeCommandHandler>();
+        services.AddScoped<Core.Handlers.ICommandHandler<Core.Commands.UpdateTradeStatusCommand>, UpdateTradeStatusCommandHandler>();
+        services.AddScoped<Core.Handlers.ICommandHandler<Core.Commands.EnrichTradeCommand>, EnrichTradeCommandHandler>();
+        services.AddScoped<Core.Handlers.ICommandHandler<Core.Commands.ValidateTradeCommand>, ValidateTradeCommandHandler>();
+        
+        services.AddSingleton<IJsonSchemaValidator>(provider =>
         {
             var validator = new JsonSchemaValidator();
             

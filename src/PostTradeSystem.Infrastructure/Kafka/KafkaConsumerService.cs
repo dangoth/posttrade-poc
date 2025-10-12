@@ -1,18 +1,19 @@
 using Confluent.Kafka;
-using PostTradeSystem.Core.Messages;
-using PostTradeSystem.Core.Serialization;
-using PostTradeSystem.Core.Events;
-using PostTradeSystem.Core.Schemas;
-using PostTradeSystem.Core.Helpers;
-using PostTradeSystem.Infrastructure.Repositories;
-using System.Text.Json;
-using Microsoft.Extensions.Hosting;
-using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
-using PostTradeSystem.Infrastructure.Health;
+using PostTradeSystem.Core.Events;
+using PostTradeSystem.Core.Helpers;
+using PostTradeSystem.Core.Messages;
+using PostTradeSystem.Core.Schemas;
+using PostTradeSystem.Core.Serialization;
 using PostTradeSystem.Infrastructure.Configuration;
+using PostTradeSystem.Infrastructure.Health;
+using PostTradeSystem.Infrastructure.Repositories;
+using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace PostTradeSystem.Infrastructure.Kafka;
 
@@ -21,7 +22,7 @@ public class KafkaConsumerService : BackgroundService
     private readonly IConsumer<string, string> _consumer;
     private readonly IServiceScopeFactory _serviceScopeFactory;
     private readonly KafkaHealthService _healthService;
-    private readonly JsonSchemaValidator _schemaValidator;
+    private readonly IJsonSchemaValidator _schemaValidator;
     private readonly ILogger<KafkaConsumerService> _logger;
     private readonly JsonSerializerOptions _jsonOptions;
     private readonly string[] _topics;
@@ -31,7 +32,7 @@ public class KafkaConsumerService : BackgroundService
         IConfiguration configuration, 
         IServiceScopeFactory serviceScopeFactory,
         KafkaHealthService healthService,
-        JsonSchemaValidator schemaValidator,
+        IJsonSchemaValidator schemaValidator,
         ILogger<KafkaConsumerService> logger,
         IOptions<KafkaExactlyOnceConfiguration> exactlyOnceOptions)
     {
@@ -106,7 +107,11 @@ public class KafkaConsumerService : BackgroundService
 
         _jsonOptions = new JsonSerializerOptions
         {
-            PropertyNamingPolicy = JsonNamingPolicy.CamelCase
+            PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+            Converters = { 
+                new JsonStringEnumConverter(),
+                new DictionaryObjectJsonConverter()
+            }
         };
 
         _topics = new[] { "trades.equities", "trades.options", "trades.fx" };
@@ -313,7 +318,7 @@ public class KafkaConsumerService : BackgroundService
         }
     }
 
-    private ValidationResult ValidateMessageSchema(JsonSchemaValidator schemaValidator, string messageType, string messageValue)
+    private ValidationResult ValidateMessageSchema(IJsonSchemaValidator schemaValidator, string messageType, string messageValue)
     {
         try
         {

@@ -16,7 +16,7 @@ public class SerializationManagementServiceTests
     {
         var registry = new EventSerializationRegistry();
         var schemaRegistry = new InMemorySchemaRegistry();
-        var validator = new JsonSchemaValidator();
+        IJsonSchemaValidator validator = new JsonSchemaValidator();
         var tradeRiskService = new TradeRiskService();
         _serializationService = new SerializationManagementService(registry, schemaRegistry, validator, tradeRiskService);
     }

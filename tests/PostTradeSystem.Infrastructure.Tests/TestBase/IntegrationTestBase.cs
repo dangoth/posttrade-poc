@@ -17,23 +17,29 @@ namespace PostTradeSystem.Infrastructure.Tests.TestBase;
 
 public abstract class IntegrationTestBase : SqlServerTestBase
 {
-    protected readonly JsonSchemaValidator SchemaValidator;
+    protected readonly IJsonSchemaValidator SchemaValidator;
     protected readonly SerializationManagementService SerializationService;
     protected readonly IEventStoreRepository EventStoreRepository;
     protected readonly IOutboxService OutboxService;
     protected readonly IOutboxRepository OutboxRepository;
     private readonly IServiceScope _serviceScope;
+    protected readonly IServiceProvider ServiceProvider;
 
     protected IntegrationTestBase(SqlServerFixture fixture) : base(fixture)
     {
-        var serviceProvider = CreateServiceProvider(fixture);
-        _serviceScope = serviceProvider.CreateScope();
+        ServiceProvider = CreateServiceProvider(fixture);
+        _serviceScope = ServiceProvider.CreateScope();
         
-        SchemaValidator = serviceProvider.GetRequiredService<JsonSchemaValidator>();
-        SerializationService = (SerializationManagementService)serviceProvider.GetRequiredService<ISerializationManagementService>();
+        SchemaValidator = ServiceProvider.GetRequiredService<IJsonSchemaValidator>();
+        SerializationService = (SerializationManagementService)ServiceProvider.GetRequiredService<ISerializationManagementService>();
         EventStoreRepository = _serviceScope.ServiceProvider.GetRequiredService<IEventStoreRepository>();
         OutboxService = _serviceScope.ServiceProvider.GetRequiredService<IOutboxService>();
         OutboxRepository = _serviceScope.ServiceProvider.GetRequiredService<IOutboxRepository>();
+    }
+
+    protected T GetRequiredService<T>() where T : notnull
+    {
+        return _serviceScope.ServiceProvider.GetRequiredService<T>();
     }
 
     private static IServiceProvider CreateServiceProvider(SqlServerFixture fixture)
@@ -43,11 +49,23 @@ public abstract class IntegrationTestBase : SqlServerTestBase
         services.AddSingleton(fixture.Context);
         services.AddSingleton<PostTradeDbContext>(fixture.Context);
         
-        services.AddSingleton<JsonSchemaValidator>();
         services.AddSingleton<ISchemaRegistry, InMemorySchemaRegistry>();
         services.AddSingleton<ITradeRiskService, TradeRiskService>();
         
         services.AddCompleteSerializationSetup();
+        
+        services.AddSingleton<IJsonSchemaValidator>(provider =>
+        {
+            var validator = new JsonSchemaValidator();
+            
+            validator.RegisterSchema("EquityTradeMessage", MessageSchemas.EquityTradeMessageSchema);
+            validator.RegisterSchema("FxTradeMessage", MessageSchemas.FxTradeMessageSchema);
+            validator.RegisterSchema("OptionTradeMessage", MessageSchemas.OptionTradeMessageSchema);
+            validator.RegisterSchema("TradeMessage", MessageSchemas.TradeMessageSchema);
+            validator.RegisterSchema("TradeMessageEnvelope", MessageSchemas.TradeMessageEnvelopeSchema);
+            
+            return validator;
+        });
         
         var mockKafkaProducer = new Mock<IKafkaProducerService>();
         services.AddSingleton(mockKafkaProducer.Object);
@@ -58,6 +76,15 @@ public abstract class IntegrationTestBase : SqlServerTestBase
         services.AddScoped<IEventStoreRepository, EventStoreRepository>();
         services.AddScoped<IRetryService, RetryService>();
         services.AddScoped<IOutboxService, OutboxService>();
+        
+        services.AddScoped(typeof(IAggregateRepository<>), typeof(AggregateRepository<>));
+        services.AddScoped<Func<string, string, IEnumerable<Core.Events.IDomainEvent>, Core.Aggregates.TradeAggregate>>(
+            provider => (id, partitionKey, events) => Core.Aggregates.TradeAggregate.FromHistory(id, partitionKey, events));
+        
+        services.AddScoped<Core.Handlers.ICommandHandler<Core.Commands.CreateTradeCommand>, Infrastructure.Handlers.CreateTradeCommandHandler>();
+        services.AddScoped<Core.Handlers.ICommandHandler<Core.Commands.UpdateTradeStatusCommand>, Infrastructure.Handlers.UpdateTradeStatusCommandHandler>();
+        services.AddScoped<Core.Handlers.ICommandHandler<Core.Commands.EnrichTradeCommand>, Infrastructure.Handlers.EnrichTradeCommandHandler>();
+        services.AddScoped<Core.Handlers.ICommandHandler<Core.Commands.ValidateTradeCommand>, Infrastructure.Handlers.ValidateTradeCommandHandler>();
         
         services.AddSingleton(Mock.Of<ILogger<EventStoreRepository>>());
         services.AddSingleton(Mock.Of<ILogger<OutboxService>>());

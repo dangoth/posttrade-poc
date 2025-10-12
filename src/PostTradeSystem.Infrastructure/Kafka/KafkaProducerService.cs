@@ -2,6 +2,7 @@ using Confluent.Kafka;
 using PostTradeSystem.Core.Messages;
 using PostTradeSystem.Core.Serialization;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Options;
 using PostTradeSystem.Infrastructure.Configuration;
@@ -53,7 +54,11 @@ public class KafkaProducerService : IKafkaProducerService
         _jsonOptions = new JsonSerializerOptions
         {
             PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-            WriteIndented = false
+            WriteIndented = false,
+            Converters = { 
+                new JsonStringEnumConverter(),
+                new DictionaryObjectJsonConverter()
+            }
         };
     }
 

@@ -12,7 +12,7 @@ public class SerializationManagementService : ISerializationManagementService
 {
     private readonly EventSerializationRegistry _registry;
     private readonly ISchemaRegistry _schemaRegistry;
-    private readonly JsonSchemaValidator _validator;
+    private readonly IJsonSchemaValidator _validator;
     private readonly JsonSerializerOptions _jsonOptions;
     private readonly Dictionary<string, SerializationInfo> _serializationCache = new();
     private readonly ITradeRiskService _tradeRiskService;
@@ -20,7 +20,7 @@ public class SerializationManagementService : ISerializationManagementService
     public SerializationManagementService(
         EventSerializationRegistry registry,
         ISchemaRegistry schemaRegistry,
-        JsonSchemaValidator validator,
+        IJsonSchemaValidator validator,
         ITradeRiskService tradeRiskService)
     {
         _registry = registry;
@@ -390,7 +390,10 @@ public class SerializationManagementService : ISerializationManagementService
             IgnoreReadOnlyProperties = false,
             IgnoreReadOnlyFields = false,
             IncludeFields = false,
-            Converters = { new JsonStringEnumConverter() }
+            Converters = { 
+                new JsonStringEnumConverter(),
+                new DictionaryObjectJsonConverter()
+            }
         };
     }
 

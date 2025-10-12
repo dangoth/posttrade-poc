@@ -12,7 +12,10 @@ public static class JsonConverterFactory
             PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
             WriteIndented = false,
             DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
-            Converters = { new JsonStringEnumConverter() }
+            Converters = { 
+                new JsonStringEnumConverter(),
+                new DictionaryObjectJsonConverter()
+            }
         };
     }
     public static JsonSerializerOptions CreateMessageSerializationOptions()

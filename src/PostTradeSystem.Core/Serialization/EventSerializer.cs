@@ -17,13 +17,13 @@ public class EventSerializer : IEventSerializer
 {
     private readonly IEventVersionManager _versionManager;
     private readonly ISchemaRegistry _schemaRegistry;
-    private readonly JsonSchemaValidator _validator;
+    private readonly IJsonSchemaValidator _validator;
     private readonly JsonSerializerOptions _jsonOptions;
 
     public EventSerializer(
         IEventVersionManager versionManager,
         ISchemaRegistry schemaRegistry,
-        JsonSchemaValidator validator)
+        IJsonSchemaValidator validator)
     {
         _versionManager = versionManager;
         _schemaRegistry = schemaRegistry;
@@ -195,7 +195,10 @@ public class EventSerializer : IEventSerializer
             IgnoreReadOnlyProperties = false,
             IgnoreReadOnlyFields = false,
             IncludeFields = false,
-            Converters = { new JsonStringEnumConverter() }
+            Converters = { 
+                new JsonStringEnumConverter(),
+                new DictionaryObjectJsonConverter()
+            }
         };
     }
 }

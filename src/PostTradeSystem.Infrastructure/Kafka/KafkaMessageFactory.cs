@@ -1,5 +1,7 @@
 using PostTradeSystem.Core.Messages;
+using PostTradeSystem.Core.Serialization;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace PostTradeSystem.Infrastructure.Kafka;
 public static class KafkaMessageFactory
@@ -47,7 +49,11 @@ public static class KafkaMessageFactory
         var jsonOptions = new JsonSerializerOptions
         {
             PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-            WriteIndented = false
+            WriteIndented = false,
+            Converters = { 
+                new JsonStringEnumConverter(),
+                new DictionaryObjectJsonConverter()
+            }
         };
         
         return JsonSerializer.Serialize(envelope, jsonOptions);

@@ -27,47 +27,6 @@ public class EventStoreIntegrationTests : IntegrationTestBase
         var event2 = DomainEventHelpers.CreateTradeStatusChangedEvent(aggregateId, 2, correlationId, causedBy);
         var events = new List<IDomainEvent> { event1, event2 };
 
-        // Debug: Check event types and serialization service state
-        System.Diagnostics.Debug.WriteLine($"Event1 Type: {event1.GetType().Name}");
-        System.Diagnostics.Debug.WriteLine($"Event2 Type: {event2.GetType().Name}");
-        
-        // Debug: Check what the serialization service knows about
-        var supportedEventTypes = SerializationService.GetSupportedEventTypes();
-        System.Diagnostics.Debug.WriteLine($"Supported Event Types: [{string.Join(", ", supportedEventTypes)}]");
-        
-        // Debug: Check event type name conversion
-        var event1TypeName = event1.GetType().Name.EndsWith("Event") ? event1.GetType().Name[..^5] : event1.GetType().Name;
-        var event2TypeName = event2.GetType().Name.EndsWith("Event") ? event2.GetType().Name[..^5] : event2.GetType().Name;
-        System.Diagnostics.Debug.WriteLine($"Event1 Type Name (converted): {event1TypeName}");
-        System.Diagnostics.Debug.WriteLine($"Event2 Type Name (converted): {event2TypeName}");
-        
-        // Debug: Check latest schema versions
-        try
-        {
-            var event1LatestVersion = SerializationService.GetLatestSchemaVersion(event1TypeName);
-            System.Diagnostics.Debug.WriteLine($"Event1 Latest Schema Version: {event1LatestVersion}");
-        }
-        catch (Exception ex)
-        {
-            System.Diagnostics.Debug.WriteLine($"Error getting Event1 latest version: {ex.Message}");
-        }
-        
-        try
-        {
-            var event2LatestVersion = SerializationService.GetLatestSchemaVersion(event2TypeName);
-            System.Diagnostics.Debug.WriteLine($"Event2 Latest Schema Version: {event2LatestVersion}");
-        }
-        catch (Exception ex)
-        {
-            System.Diagnostics.Debug.WriteLine($"Error getting Event2 latest version: {ex.Message}");
-        }
-        
-        // Debug: Check supported schema versions
-        var event1SupportedVersions = SerializationService.GetSupportedSchemaVersions(event1TypeName);
-        var event2SupportedVersions = SerializationService.GetSupportedSchemaVersions(event2TypeName);
-        System.Diagnostics.Debug.WriteLine($"Event1 Supported Versions: [{string.Join(", ", event1SupportedVersions)}]");
-        System.Diagnostics.Debug.WriteLine($"Event2 Supported Versions: [{string.Join(", ", event2SupportedVersions)}]");
-
         await EventStoreRepository.SaveEventsAsync(aggregateId, partitionKey, events, 0);
 
         var retrievedEvents = await EventStoreRepository.GetEventsAsync(aggregateId);

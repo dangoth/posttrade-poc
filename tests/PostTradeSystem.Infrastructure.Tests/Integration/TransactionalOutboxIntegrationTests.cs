@@ -238,7 +238,7 @@ public class TransactionalOutboxIntegrationTests : IntegrationTestBase
         deserializedTradeEvent.AdditionalData.Should().ContainKey("Symbol");
         
         var symbolValue = deserializedTradeEvent.AdditionalData["Symbol"];
-        ((System.Text.Json.JsonElement)symbolValue).GetString().Should().Be("MSFT");
+        symbolValue.Should().Be("MSFT");
     }
 
     [Fact]

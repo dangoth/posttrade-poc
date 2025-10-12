@@ -3,7 +3,7 @@ using System.Text.Json.Nodes;
 
 namespace PostTradeSystem.Core.Schemas;
 
-public class JsonSchemaValidator
+public class JsonSchemaValidator : IJsonSchemaValidator
 {
     private readonly Dictionary<string, JsonNode> _schemas = new();
 
@@ -29,9 +29,10 @@ public class JsonSchemaValidator
         try
         {
             var messageNode = JsonNode.Parse(jsonMessage);
-            return messageNode != null && ValidateAgainstSchema(messageNode, _schemas[schemaKey]);
+            var result = messageNode != null && ValidateAgainstSchema(messageNode, _schemas[schemaKey]);
+            return result;
         }
-        catch
+        catch (Exception)
         {
             // PoC implementation
             return version.HasValue;
@@ -51,21 +52,29 @@ public class JsonSchemaValidator
     private static bool ValidateAgainstSchema(JsonNode message, JsonNode schema)
     {
         var schemaProperties = schema["properties"]?.AsObject();
-        if (schemaProperties == null) return true;
+        if (schemaProperties == null) 
+        {
+            return true;
+        }
 
         var messageObject = message.AsObject();
+        
+        var messagePropertiesLookup = messageObject.ToDictionary(
+            kvp => kvp.Key, 
+            kvp => kvp.Value, 
+            StringComparer.OrdinalIgnoreCase);
         
         foreach (var property in schemaProperties)
         {
             var propertySchema = property.Value;
             var required = propertySchema?["required"]?.GetValue<bool>() ?? false;
             
-            if (required && !messageObject.ContainsKey(property.Key))
+            if (required && !messagePropertiesLookup.ContainsKey(property.Key))
             {
                 return false;
             }
 
-            if (messageObject.TryGetPropertyValue(property.Key, out var value) && value != null)
+            if (messagePropertiesLookup.TryGetValue(property.Key, out var value) && value != null)
             {
                 var expectedType = propertySchema?["type"]?.GetValue<string>();
                 if (!ValidateType(value, expectedType))
@@ -90,6 +99,16 @@ public class JsonSchemaValidator
                     {
                         var pattern = propertySchema["pattern"]!.GetValue<string>();
                         if (!System.Text.RegularExpressions.Regex.IsMatch(stringValue, pattern))
+                        {
+                            return false;
+                        }
+                    }
+                    
+                    if (propertySchema?["enum"] != null)
+                    {
+                        var enumValues = propertySchema["enum"]!.AsArray();
+                        var validValues = enumValues.Select(v => v?.GetValue<string>()).Where(v => v != null);
+                        if (!validValues.Any(v => string.Equals(v, stringValue, StringComparison.OrdinalIgnoreCase)))
                         {
                             return false;
                         }

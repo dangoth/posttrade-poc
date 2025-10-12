@@ -19,11 +19,10 @@ public class EventSerializationTests
     {
         var registry = new EventSerializationRegistry();
         var schemaRegistry = new InMemorySchemaRegistry();
-        var validator = new JsonSchemaValidator();
+        IJsonSchemaValidator validator = new JsonSchemaValidator();
         var tradeRiskService = new TradeRiskService();
         _serializationService = new SerializationManagementService(registry, schemaRegistry, validator, tradeRiskService);
         
-        // Initialize the serialization service
         _serializationService.InitializeAsync().GetAwaiter().GetResult();
     }
 
@@ -118,14 +117,7 @@ public class EventSerializationTests
         deserializedEvent.AdditionalData.Should().ContainKey("source");
         
         var sourceValue = deserializedEvent.AdditionalData["source"];
-        if (sourceValue is JsonElement jsonElement)
-        {
-            jsonElement.GetString().Should().Be("Bloomberg");
-        }
-        else
-        {
-            sourceValue.Should().Be("Bloomberg");
-        }
+        sourceValue.Should().Be("Bloomberg");
     }
 
     [Fact]

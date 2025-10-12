@@ -8,7 +8,7 @@ namespace PostTradeSystem.Infrastructure.Tests.Kafka;
 
 public class MessageValidationTests
 {
-    private readonly JsonSchemaValidator _schemaValidator;
+    private readonly IJsonSchemaValidator _schemaValidator;
 
     public MessageValidationTests()
     {

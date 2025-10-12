@@ -72,11 +72,8 @@ public class OutboxServiceTests
             .ReturnsAsync(Result.Success());
 
         // Act
-        Console.WriteLine($"[DEBUG] Saving event to outbox: {domainEvent.EventId}");
         var result = await _outboxService.SaveEventToOutboxAsync(domainEvent, "events.trades", "partition-key");
-        Console.WriteLine("[DEBUG] SaveEventToOutboxAsync completed");
         
-        // Assert result is successful
         Assert.True(result.IsSuccess);
 
         _mockOutboxRepository.Verify(x => x.SaveOutboxEventAsync(
@@ -123,7 +120,6 @@ public class OutboxServiceTests
         // Act
         var result = await _outboxService.ProcessOutboxEventsAsync();
         
-        // Assert result is successful
         Assert.True(result.IsSuccess);
 
         // Since Kafka connection fails (timeout), the event should be moved to dead letter queue after retry attempts
