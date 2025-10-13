@@ -541,6 +541,168 @@ public class EventStoreRepository : IEventStoreRepository
         };
     }
 
+    public async Task<Result<IEnumerable<IDomainEvent>>> GetEventsByTimeRangeAsync(DateTime fromTime, DateTime toTime, CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var eventEntities = await EventStore
+                .Where(e => e.OccurredAt >= fromTime && e.OccurredAt <= toTime)
+                .OrderBy(e => e.OccurredAt)
+                .ThenBy(e => e.AggregateVersion)
+                .ToListAsync(cancellationToken);
+
+            return await DeserializeEventEntities(eventEntities, cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            return Result<IEnumerable<IDomainEvent>>.Failure($"Failed to get events by time range: {ex.Message}");
+        }
+    }
+
+    public async Task<Result<IEnumerable<IDomainEvent>>> GetEventsByAggregateTypeAsync(string aggregateType, DateTime? fromTime = null, DateTime? toTime = null, CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var query = EventStore.Where(e => e.AggregateType == aggregateType);
+
+            if (fromTime.HasValue)
+                query = query.Where(e => e.OccurredAt >= fromTime.Value);
+
+            if (toTime.HasValue)
+                query = query.Where(e => e.OccurredAt <= toTime.Value);
+
+            var eventEntities = await query
+                .OrderBy(e => e.OccurredAt)
+                .ThenBy(e => e.AggregateVersion)
+                .ToListAsync(cancellationToken);
+
+            return await DeserializeEventEntities(eventEntities, cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            return Result<IEnumerable<IDomainEvent>>.Failure($"Failed to get events by aggregate type: {ex.Message}");
+        }
+    }
+
+    public async Task<Result<IEnumerable<IDomainEvent>>> GetAllEventsInChronologicalOrderAsync(DateTime? fromTime = null, DateTime? toTime = null, int? limit = null, CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var query = EventStore.AsQueryable();
+
+            if (fromTime.HasValue)
+                query = query.Where(e => e.OccurredAt >= fromTime.Value);
+
+            if (toTime.HasValue)
+                query = query.Where(e => e.OccurredAt <= toTime.Value);
+
+            query = query.OrderBy(e => e.OccurredAt).ThenBy(e => e.AggregateVersion);
+
+            if (limit.HasValue)
+                query = query.Take(limit.Value);
+
+            var eventEntities = await query.ToListAsync(cancellationToken);
+
+            return await DeserializeEventEntities(eventEntities, cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            return Result<IEnumerable<IDomainEvent>>.Failure($"Failed to get all events in chronological order: {ex.Message}");
+        }
+    }
+
+    public async Task<Result<IEnumerable<IDomainEvent>>> GetEventsForReplayAsync(string aggregateId, long fromVersion = 0, long? toVersion = null, CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var query = EventStore
+                .Where(e => e.AggregateId == aggregateId && e.AggregateVersion > fromVersion);
+
+            if (toVersion.HasValue)
+                query = query.Where(e => e.AggregateVersion <= toVersion.Value);
+
+            var eventEntities = await query
+                .OrderBy(e => e.AggregateVersion)
+                .ToListAsync(cancellationToken);
+
+            return await DeserializeEventEntities(eventEntities, cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            return Result<IEnumerable<IDomainEvent>>.Failure($"Failed to get events for replay: {ex.Message}");
+        }
+    }
+
+    public async Task<Result<IEnumerable<IDomainEvent>>> GetEventsByVersionRangeAsync(string aggregateId, long fromVersion, long toVersion, CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var eventEntities = await EventStore
+                .Where(e => e.AggregateId == aggregateId && e.AggregateVersion >= fromVersion && e.AggregateVersion <= toVersion)
+                .OrderBy(e => e.AggregateVersion)
+                .ToListAsync(cancellationToken);
+
+            return await DeserializeEventEntities(eventEntities, cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            return Result<IEnumerable<IDomainEvent>>.Failure($"Failed to get events by version range: {ex.Message}");
+        }
+    }
+
+    private async Task<Result<IEnumerable<IDomainEvent>>> DeserializeEventEntities(List<EventStoreEntity> eventEntities, CancellationToken cancellationToken)
+    {
+        var events = new List<IDomainEvent>();
+        
+        foreach (var entity in eventEntities)
+        {
+            var metadataResult = ExtractSchemaVersionFromMetadata(entity.Metadata, entity.EventId, entity.AggregateId, entity.OccurredAt);
+            
+            if (metadataResult.ShouldDeadLetter)
+            {
+                _logger.LogError("Skipping event {EventId} due to metadata parsing failure: {Reason}", 
+                    entity.EventId, metadataResult.DeadLetterReason);
+                
+                if (_outboxService != null)
+                {
+                    await MoveEventToDeadLetterAsync(entity, metadataResult.DeadLetterReason!);
+                }
+                continue;
+            }
+
+            if (!metadataResult.IsReliable)
+            {
+                _logger.LogWarning("Using unreliable schema version {Version} for event {EventId}: {Warning}", 
+                    metadataResult.SchemaVersion, entity.EventId, metadataResult.WarningMessage);
+            }
+
+            var serializedEvent = new SerializedEvent(
+                entity.EventType,
+                metadataResult.SchemaVersion,
+                entity.EventData,
+                "default",
+                entity.OccurredAt,
+                new Dictionary<string, string>());
+                
+            var deserializeResult = _serializationService.Deserialize(serializedEvent);
+            if (deserializeResult.IsFailure)
+            {
+                _logger.LogError("Failed to deserialize event {EventId} with schema version {Version}: {Error}", 
+                    entity.EventId, metadataResult.SchemaVersion, deserializeResult.Error);
+                
+                if (_outboxService != null)
+                {
+                    await MoveEventToDeadLetterAsync(entity, $"Deserialization failed: {deserializeResult.Error}");
+                }
+                continue;
+            }
+            
+            events.Add(deserializeResult.Value!);
+        }
+
+        return Result<IEnumerable<IDomainEvent>>.Success(events);
+    }
+
     public static string ComputeHash(string input)
     {
         using var sha256 = SHA256.Create();

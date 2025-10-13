@@ -110,6 +110,90 @@ public class AggregateRepository<T> : IAggregateRepository<T> where T : class, I
         }
     }
 
+    public async Task<Result<T?>> GetByIdAtVersionAsync(string aggregateId, long version, CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var eventsResult = await _eventStoreRepository.GetEventsByVersionRangeAsync(aggregateId, 1, version, cancellationToken);
+            if (eventsResult.IsFailure)
+                return Result<T?>.Failure(eventsResult.Error);
+
+            var events = eventsResult.Value!;
+            if (!events.Any())
+            {
+                return Result<T?>.Success(null);
+            }
+
+            var firstEvent = events.First();
+            var partitionKey = GeneratePartitionKey(firstEvent);
+            
+            var aggregate = _aggregateFactory(aggregateId, partitionKey, events);
+            return Result<T?>.Success(aggregate);
+        }
+        catch (Exception ex)
+        {
+            return Result<T?>.Failure($"Failed to get aggregate by ID at version {version}: {ex.Message}");
+        }
+    }
+
+    public async Task<Result<T?>> GetByIdAtTimeAsync(string aggregateId, DateTime pointInTime, CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var eventsResult = await _eventStoreRepository.GetEventsAsync(aggregateId, 0, cancellationToken);
+            if (eventsResult.IsFailure)
+                return Result<T?>.Failure(eventsResult.Error);
+
+            var allEvents = eventsResult.Value!;
+            var eventsUpToTime = allEvents.Where(e => e.OccurredAt <= pointInTime).ToList();
+            
+            if (!eventsUpToTime.Any())
+            {
+                return Result<T?>.Success(null);
+            }
+
+            var firstEvent = eventsUpToTime.First();
+            var partitionKey = GeneratePartitionKey(firstEvent);
+            
+            var aggregate = _aggregateFactory(aggregateId, partitionKey, eventsUpToTime);
+            return Result<T?>.Success(aggregate);
+        }
+        catch (Exception ex)
+        {
+            return Result<T?>.Failure($"Failed to get aggregate by ID at time {pointInTime}: {ex.Message}");
+        }
+    }
+
+    public async Task<Result<IEnumerable<T>>> ReplayAggregatesFromEventsAsync(IEnumerable<string> aggregateIds, long fromVersion = 0, CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var aggregates = new List<T>();
+            
+            foreach (var aggregateId in aggregateIds)
+            {
+                var eventsResult = await _eventStoreRepository.GetEventsAsync(aggregateId, fromVersion, cancellationToken);
+                if (eventsResult.IsFailure)
+                    return Result<IEnumerable<T>>.Failure(eventsResult.Error);
+
+                var events = eventsResult.Value!;
+                if (events.Any())
+                {
+                    var firstEvent = events.First();
+                    var partitionKey = GeneratePartitionKey(firstEvent);
+                    var aggregate = _aggregateFactory(aggregateId, partitionKey, events);
+                    aggregates.Add(aggregate);
+                }
+            }
+
+            return Result<IEnumerable<T>>.Success(aggregates);
+        }
+        catch (Exception ex)
+        {
+            return Result<IEnumerable<T>>.Failure($"Failed to replay aggregates from events: {ex.Message}");
+        }
+    }
+
     private static string GeneratePartitionKey(IDomainEvent domainEvent)
     {
         return $"{domainEvent.AggregateType}:{domainEvent.AggregateId}";

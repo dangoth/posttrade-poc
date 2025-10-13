@@ -14,4 +14,13 @@ public interface IEventStoreRepository
     Task<Result> MarkEventsAsProcessedAsync(IEnumerable<string> eventIds, CancellationToken cancellationToken = default);
     Task<Result> CleanupExpiredIdempotencyKeysAsync(CancellationToken cancellationToken = default);
     Task<Result<IEnumerable<IDomainEvent>>> GetUnprocessedEventsAsync(int batchSize = 100, CancellationToken cancellationToken = default);
+    
+    // Temporal query capabilities for analytics
+    Task<Result<IEnumerable<IDomainEvent>>> GetEventsByTimeRangeAsync(DateTime fromTime, DateTime toTime, CancellationToken cancellationToken = default);
+    Task<Result<IEnumerable<IDomainEvent>>> GetEventsByAggregateTypeAsync(string aggregateType, DateTime? fromTime = null, DateTime? toTime = null, CancellationToken cancellationToken = default);
+    Task<Result<IEnumerable<IDomainEvent>>> GetAllEventsInChronologicalOrderAsync(DateTime? fromTime = null, DateTime? toTime = null, int? limit = null, CancellationToken cancellationToken = default);
+    
+    // Event replay capabilities
+    Task<Result<IEnumerable<IDomainEvent>>> GetEventsForReplayAsync(string aggregateId, long fromVersion = 0, long? toVersion = null, CancellationToken cancellationToken = default);
+    Task<Result<IEnumerable<IDomainEvent>>> GetEventsByVersionRangeAsync(string aggregateId, long fromVersion, long toVersion, CancellationToken cancellationToken = default);
 }
