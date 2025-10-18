@@ -2,6 +2,8 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
+using PostTradeSystem.Core.Adapters;
+using PostTradeSystem.Core.Routing;
 using PostTradeSystem.Core.Schemas;
 using PostTradeSystem.Core.Services;
 using PostTradeSystem.Infrastructure.Data;
@@ -42,6 +44,8 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IEventStoreRepository, EventStoreRepository>();
         services.AddScoped<IOutboxService, OutboxService>();
         services.AddScoped<IRetryService, RetryService>();
+        services.AddScoped<ITradeMessageAdapterFactory, TradeMessageAdapterFactory>();
+        services.AddScoped<IMessageRouter, MessageRouter>();
         
         services.AddHostedService<DatabaseMigrationService>();
         services.AddHostedService<SerializationInitializationService>();
