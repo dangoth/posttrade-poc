@@ -143,4 +143,22 @@ public static class MessageSchemas
         }
     }
     """;
+
+    public const string PositionSummarySchema = """
+    {
+        "type": "object",
+        "properties": {
+            "traderId": { "type": "string", "required": true },
+            "instrumentId": { "type": "string", "required": true },
+            "netQuantity": { "type": "number", "required": true },
+            "averagePrice": { "type": "number", "required": true },
+            "totalNotional": { "type": "number", "required": true },
+            "currency": { "type": "string", "required": true },
+            "lastUpdated": { "type": "string", "format": "date-time", "required": true },
+            "tradeCount": { "type": "integer", "required": true },
+            "realizedPnL": { "type": "number", "required": true },
+            "additionalMetrics": { "type": "object", "required": true }
+        }
+    }
+    """;
 }

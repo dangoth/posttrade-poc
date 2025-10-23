@@ -7,128 +7,133 @@ public class JsonSchemaValidator : IJsonSchemaValidator
 {
     private readonly Dictionary<string, JsonNode> _schemas = new();
 
-    public void RegisterSchema(string messageType, string jsonSchema)
+    public void RegisterSchema(string schemaName, string schemaJson)
     {
-        var schemaNode = JsonNode.Parse(jsonSchema);
-        if (schemaNode != null)
+        try
         {
-            _schemas[messageType] = schemaNode;
+            var schema = JsonNode.Parse(schemaJson);
+            if (schema != null)
+            {
+                _schemas[schemaName] = schema;
+            }
+        }
+        catch (JsonException ex)
+        {
+            throw new ArgumentException($"Invalid JSON schema for '{schemaName}': {ex.Message}", ex);
         }
     }
 
-    public bool ValidateMessage(string messageType, string jsonMessage, int? version = null)
+    public bool ValidateMessage(string messageType, string messageJson, int? version)
     {
-        var schemaKey = GetSchemaKey(messageType, version);
-        
-        if (!_schemas.ContainsKey(schemaKey))
+        if (string.IsNullOrEmpty(messageJson))
+            return false;
+
+        if (!_schemas.TryGetValue(messageType, out var schema))
         {
-            // PoC implementation
             return version.HasValue;
         }
 
         try
         {
-            var messageNode = JsonNode.Parse(jsonMessage);
-            var result = messageNode != null && ValidateAgainstSchema(messageNode, _schemas[schemaKey]);
-            return result;
+            var message = JsonDocument.Parse(messageJson);
+            return ValidateAgainstSchema(message.RootElement, schema);
         }
-        catch (Exception)
+        catch (JsonException)
         {
-            // PoC implementation
-            return version.HasValue;
+            return false;
         }
     }
 
-    private string GetSchemaKey(string messageType, int? version)
+    private bool ValidateAgainstSchema(JsonElement message, JsonNode schema)
     {
-        if (version.HasValue)
-        {
-            var versionedKey = $"{messageType}-v{version}";
-            return _schemas.ContainsKey(versionedKey) ? versionedKey : messageType;
-        }
-        return messageType;
-    }
+        var schemaType = schema["type"]?.ToString();
+        if (schemaType != "object") return true;
 
-    private static bool ValidateAgainstSchema(JsonNode message, JsonNode schema)
-    {
         var schemaProperties = schema["properties"]?.AsObject();
-        if (schemaProperties == null) 
-        {
-            return true;
-        }
+        if (schemaProperties == null) return true;
 
-        var messageObject = message.AsObject();
-        
-        var messagePropertiesLookup = messageObject.ToDictionary(
-            kvp => kvp.Key, 
-            kvp => kvp.Value, 
-            StringComparer.OrdinalIgnoreCase);
-        
-        foreach (var property in schemaProperties)
+        return ValidateObjectProperties(message, schemaProperties);
+    }
+
+    private bool ValidateObjectProperties(JsonElement jsonObject, JsonObject schemaProperties)
+    {
+        foreach (var schemaProperty in schemaProperties)
         {
-            var propertySchema = property.Value;
-            var required = propertySchema?["required"]?.GetValue<bool>() ?? false;
-            
-            if (required && !messagePropertiesLookup.ContainsKey(property.Key))
+            var propertyName = schemaProperty.Key;
+            var propertySchema = schemaProperty.Value;
+
+            var isRequired = propertySchema?["required"]?.GetValue<bool>() ?? false;
+
+            if (jsonObject.TryGetProperty(propertyName, out var property))
+            {
+                if (!ValidateProperty(property, propertySchema!)) return false;
+            }
+            else if (isRequired)
             {
                 return false;
-            }
-
-            if (messagePropertiesLookup.TryGetValue(property.Key, out var value) && value != null)
-            {
-                var expectedType = propertySchema?["type"]?.GetValue<string>();
-                if (!ValidateType(value, expectedType))
-                {
-                    return false;
-                }
-
-                if (expectedType == "string" && value.GetValueKind() == JsonValueKind.String)
-                {
-                    var stringValue = value.GetValue<string>();
-                    
-                    if (propertySchema?["minLength"] != null)
-                    {
-                        var minLength = propertySchema["minLength"]!.GetValue<int>();
-                        if (stringValue.Length < minLength)
-                        {
-                            return false;
-                        }
-                    }
-
-                    if (propertySchema?["pattern"] != null)
-                    {
-                        var pattern = propertySchema["pattern"]!.GetValue<string>();
-                        if (!System.Text.RegularExpressions.Regex.IsMatch(stringValue, pattern))
-                        {
-                            return false;
-                        }
-                    }
-                    
-                    if (propertySchema?["enum"] != null)
-                    {
-                        var enumValues = propertySchema["enum"]!.AsArray();
-                        var validValues = enumValues.Select(v => v?.GetValue<string>()).Where(v => v != null);
-                        if (!validValues.Any(v => string.Equals(v, stringValue, StringComparison.OrdinalIgnoreCase)))
-                        {
-                            return false;
-                        }
-                    }
-                }
             }
         }
 
         return true;
     }
 
-    private static bool ValidateType(JsonNode value, string? expectedType)
+    private bool ValidateProperty(JsonElement property, JsonNode propertySchema)
+    {
+        var propertyType = propertySchema["type"]?.ToString();
+        if (propertyType == null) return true;
+
+        if (!ValidateType(property, propertyType)) return false;
+
+        // Validate enum if present
+        var enumValues = propertySchema["enum"]?.AsArray();
+        if (enumValues != null && propertyType == "string")
+        {
+            var stringValue = property.GetString();
+            return enumValues.Any(e => string.Equals(e?.ToString(), stringValue, StringComparison.OrdinalIgnoreCase));
+        }
+
+        // Validate format if present
+        var format = propertySchema["format"]?.ToString();
+        if (format != null && propertyType == "string")
+        {
+            var stringValue = property.GetString();
+            if (!ValidateFormat(stringValue, format)) return false;
+        }
+
+        // Recursively validate nested objects
+        if (propertyType == "object" && property.ValueKind == JsonValueKind.Object)
+        {
+            var nestedProperties = propertySchema["properties"]?.AsObject();
+            if (nestedProperties != null)
+            {
+                return ValidateObjectProperties(property, nestedProperties);
+            }
+        }
+
+        return true;
+    }
+
+    private static bool ValidateType(JsonElement element, string expectedType)
     {
         return expectedType switch
         {
-            "string" => value.GetValueKind() == JsonValueKind.String,
-            "number" => value.GetValueKind() is JsonValueKind.Number,
-            "boolean" => value.GetValueKind() == JsonValueKind.True || value.GetValueKind() == JsonValueKind.False,
-            "object" => value.GetValueKind() == JsonValueKind.Object,
-            "array" => value.GetValueKind() == JsonValueKind.Array,
+            "string" => element.ValueKind == JsonValueKind.String,
+            "number" => element.ValueKind == JsonValueKind.Number,
+            "integer" => element.ValueKind == JsonValueKind.Number && element.TryGetInt32(out _),
+            "boolean" => element.ValueKind is JsonValueKind.True or JsonValueKind.False,
+            "object" => element.ValueKind == JsonValueKind.Object,
+            "array" => element.ValueKind == JsonValueKind.Array,
+            _ => true
+        };
+    }
+
+    private static bool ValidateFormat(string? value, string format)
+    {
+        if (value == null) return false;
+
+        return format switch
+        {
+            "date-time" => DateTime.TryParse(value, out _),
             _ => true
         };
     }

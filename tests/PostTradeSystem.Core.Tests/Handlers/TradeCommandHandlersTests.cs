@@ -21,8 +21,12 @@ public class CreateTradeCommandHandlerTests
     {
         _mockRepository = new Mock<IAggregateRepository<TradeAggregate>>();
         _mockSchemaValidator = new Mock<IJsonSchemaValidator>();
+        
+        // Default setup: validator returns true for valid business logic testing
+        // Individual tests can override this setup to test validation failure scenarios
         _mockSchemaValidator.Setup(v => v.ValidateMessage(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<int?>()))
             .Returns(true);
+            
         _handler = new CreateTradeCommandHandler(_mockRepository.Object, _mockSchemaValidator.Object);
     }
 
@@ -126,8 +130,12 @@ public class UpdateTradeStatusCommandHandlerTests
     {
         _mockRepository = new Mock<IAggregateRepository<TradeAggregate>>();
         _mockSchemaValidator = new Mock<IJsonSchemaValidator>();
+        
+        // Default setup: validator returns true for valid business logic testing
+        // Individual tests can override this setup to test validation failure scenarios
         _mockSchemaValidator.Setup(v => v.ValidateMessage(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<int?>()))
             .Returns(true);
+            
         _handler = new UpdateTradeStatusCommandHandler(_mockRepository.Object, _mockSchemaValidator.Object);
     }
 

@@ -61,18 +61,18 @@ public class CreateTradeCommandHandler : ICommandHandler<CreateTradeCommand>
     {
         var commandData = new
         {
-            TradeId = command.AggregateId,
-            TraderId = command.TraderId,
-            InstrumentId = command.InstrumentId,
-            Quantity = command.Quantity,
-            Price = command.Price,
-            Direction = command.Direction,
-            TradeDateTime = command.TradeDateTime,
-            Currency = command.Currency,
-            CounterpartyId = command.CounterpartyId,
-            Status = "PENDING",
-            SourceSystem = "PostTradeSystem",
-            MessageType = command.TradeType
+            tradeId = command.AggregateId,
+            traderId = command.TraderId,
+            instrumentId = command.InstrumentId,
+            quantity = command.Quantity,
+            price = command.Price,
+            direction = command.Direction,
+            tradeDateTime = command.TradeDateTime,
+            currency = command.Currency,
+            counterpartyId = command.CounterpartyId,
+            status = "PENDING",
+            sourceSystem = "PostTradeSystem",
+            messageType = command.TradeType
         };
 
         var jsonMessage = System.Text.Json.JsonSerializer.Serialize(commandData);
@@ -164,18 +164,18 @@ public class UpdateTradeStatusCommandHandler : ICommandHandler<UpdateTradeStatus
     {
         var commandData = new
         {
-            TradeId = command.AggregateId,
-            TraderId = "SYSTEM",
-            InstrumentId = "UNKNOWN", 
-            Quantity = 1, 
-            Price = 1.0, 
-            Direction = "BUY", 
-            TradeDateTime = DateTime.UtcNow, 
-            Currency = "USD", 
-            Status = command.NewStatus,
-            CounterpartyId = "SYSTEM", 
-            SourceSystem = "PostTradeSystem", 
-            MessageType = "STATUS_UPDATE" 
+            tradeId = command.AggregateId,
+            traderId = "SYSTEM",
+            instrumentId = "UNKNOWN", 
+            quantity = 1, 
+            price = 1.0, 
+            direction = "BUY", 
+            tradeDateTime = DateTime.UtcNow, 
+            currency = "USD", 
+            status = command.NewStatus,
+            counterpartyId = "SYSTEM", 
+            sourceSystem = "PostTradeSystem", 
+            messageType = "STATUS_UPDATE" 
         };
 
         var jsonMessage = System.Text.Json.JsonSerializer.Serialize(commandData);
@@ -241,18 +241,18 @@ public class EnrichTradeCommandHandler : ICommandHandler<EnrichTradeCommand>
     {
         var commandData = new
         {
-            TradeId = command.AggregateId,
-            TraderId = "SYSTEM", 
-            InstrumentId = "UNKNOWN", 
-            Quantity = 1, 
-            Price = 1.0, 
-            Direction = "BUY", 
-            TradeDateTime = DateTime.UtcNow, 
-            Currency = "USD", 
-            Status = "PENDING", 
-            CounterpartyId = "SYSTEM", 
-            SourceSystem = "PostTradeSystem", 
-            MessageType = "ENRICHMENT" 
+            tradeId = command.AggregateId,
+            traderId = "SYSTEM", 
+            instrumentId = "UNKNOWN", 
+            quantity = 1, 
+            price = 1.0, 
+            direction = "BUY", 
+            tradeDateTime = DateTime.UtcNow, 
+            currency = "USD", 
+            status = "PENDING", 
+            counterpartyId = "SYSTEM", 
+            sourceSystem = "PostTradeSystem", 
+            messageType = "ENRICHMENT" 
         };
 
         var jsonMessage = System.Text.Json.JsonSerializer.Serialize(commandData);
@@ -325,18 +325,18 @@ public class ValidateTradeCommandHandler : ICommandHandler<ValidateTradeCommand>
     {
         var commandData = new
         {
-            TradeId = command.AggregateId,
-            TraderId = "SYSTEM", 
-            InstrumentId = "UNKNOWN", 
-            Quantity = 1, 
-            Price = 1.0, 
-            Direction = "BUY", 
-            TradeDateTime = DateTime.UtcNow, 
-            Currency = "USD", 
-            Status = "PENDING", 
-            CounterpartyId = "SYSTEM", 
-            SourceSystem = "PostTradeSystem", 
-            MessageType = "VALIDATION" 
+            tradeId = command.AggregateId,
+            traderId = "SYSTEM", 
+            instrumentId = "UNKNOWN", 
+            quantity = 1, 
+            price = 1.0, 
+            direction = "BUY", 
+            tradeDateTime = DateTime.UtcNow, 
+            currency = "USD", 
+            status = "PENDING", 
+            counterpartyId = "SYSTEM", 
+            sourceSystem = "PostTradeSystem", 
+            messageType = "VALIDATION" 
         };
 
         var jsonMessage = System.Text.Json.JsonSerializer.Serialize(commandData);

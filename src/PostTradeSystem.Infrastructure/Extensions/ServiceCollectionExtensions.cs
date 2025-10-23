@@ -46,6 +46,8 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IRetryService, RetryService>();
         services.AddScoped<ITradeMessageAdapterFactory, TradeMessageAdapterFactory>();
         services.AddScoped<IMessageRouter, MessageRouter>();
+        services.AddScoped<ITradeRiskService, TradeRiskService>();
+        services.AddScoped<IPositionAggregationService, PositionAggregationService>();
         
         services.AddHostedService<DatabaseMigrationService>();
         services.AddHostedService<SerializationInitializationService>();
@@ -68,6 +70,7 @@ public static class ServiceCollectionExtensions
             validator.RegisterSchema("OptionTradeMessage", MessageSchemas.OptionTradeMessageSchema);
             validator.RegisterSchema("TradeMessage", MessageSchemas.TradeMessageSchema);
             validator.RegisterSchema("TradeMessageEnvelope", MessageSchemas.TradeMessageEnvelopeSchema);
+            validator.RegisterSchema("PositionSummary", MessageSchemas.PositionSummarySchema);
             
             return validator;
         });
