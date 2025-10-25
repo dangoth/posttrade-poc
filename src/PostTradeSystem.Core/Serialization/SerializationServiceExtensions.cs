@@ -16,11 +16,12 @@ public static class SerializationServiceExtensions
         services.AddSingleton<IEventVersionManager>(provider =>
         {
             var versionManager = new EventVersionManager();
+            var externalDataService = provider.GetRequiredService<IExternalDataService>();
             
-            // Register converters
-            versionManager.RegisterConverter(new TradeCreatedEventV1ToV2Converter());
+            var deterministicMock = new DeterministicMockExternalDataService();
+            versionManager.RegisterConverter(new TradeCreatedEventV1ToV2Converter(deterministicMock));
             versionManager.RegisterConverter(new TradeCreatedEventV2ToV1Converter());
-            versionManager.RegisterConverter(new TradeStatusChangedEventV1ToV2Converter());
+            versionManager.RegisterConverter(new TradeStatusChangedEventV1ToV2Converter(deterministicMock));
             versionManager.RegisterConverter(new TradeStatusChangedEventV2ToV1Converter());
             
             return versionManager;

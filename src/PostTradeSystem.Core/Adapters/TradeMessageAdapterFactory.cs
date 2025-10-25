@@ -10,42 +10,38 @@ public class TradeMessageAdapterFactory : ITradeMessageAdapterFactory
 {
     private readonly ILogger<TradeMessageAdapterFactory> _logger;
     private readonly JsonSerializerOptions _jsonOptions;
-    private readonly Dictionary<string, object> _adapters;
+    private readonly EquityTradeAdapter _equityAdapter;
+    private readonly FxTradeAdapter _fxAdapter;
+    private readonly OptionTradeAdapter _optionAdapter;
 
-    public TradeMessageAdapterFactory(ILogger<TradeMessageAdapterFactory> logger)
+    public TradeMessageAdapterFactory(
+        ILogger<TradeMessageAdapterFactory> logger,
+        EquityTradeAdapter equityAdapter,
+        FxTradeAdapter fxAdapter,
+        OptionTradeAdapter optionAdapter)
     {
         _logger = logger;
+        _equityAdapter = equityAdapter;
+        _fxAdapter = fxAdapter;
+        _optionAdapter = optionAdapter;
         _jsonOptions = new JsonSerializerOptions
         {
             PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
             Converters = { new JsonStringEnumConverter() }
-        };
-
-        _adapters = new Dictionary<string, object>
-        {
-            ["EQUITY"] = new EquityTradeAdapter(),
-            ["FX"] = new FxTradeAdapter(),
-            ["OPTION"] = new OptionTradeAdapter()
         };
     }
 
     public async Task<TradeCreatedEvent?> ProcessMessageAsync(string messageType, string sourceSystem, string messageValue, string correlationId)
     {
         var normalizedMessageType = messageType.ToUpperInvariant();
-        
-        if (!_adapters.TryGetValue(normalizedMessageType, out var adapter))
-        {
-            _logger.LogWarning("No adapter found for message type: {MessageType}", messageType);
-            return null;
-        }
 
         try
         {
             return normalizedMessageType switch
             {
-                "EQUITY" => await ProcessWithAdapter((EquityTradeAdapter)adapter, messageValue, sourceSystem, correlationId),
-                "FX" => await ProcessWithAdapter((FxTradeAdapter)adapter, messageValue, sourceSystem, correlationId),
-                "OPTION" => await ProcessWithAdapter((OptionTradeAdapter)adapter, messageValue, sourceSystem, correlationId),
+                "EQUITY" => await ProcessWithAdapter(_equityAdapter, messageValue, sourceSystem, correlationId),
+                "FX" => await ProcessWithAdapter(_fxAdapter, messageValue, sourceSystem, correlationId),
+                "OPTION" => await ProcessWithAdapter(_optionAdapter, messageValue, sourceSystem, correlationId),
                 _ => null
             };
         }
@@ -59,15 +55,12 @@ public class TradeMessageAdapterFactory : ITradeMessageAdapterFactory
     public bool CanProcessMessage(string messageType, string sourceSystem)
     {
         var normalizedMessageType = messageType.ToUpperInvariant();
-        
-        if (!_adapters.TryGetValue(normalizedMessageType, out var adapter))
-            return false;
 
         return normalizedMessageType switch
         {
-            "EQUITY" => ((EquityTradeAdapter)adapter).CanHandle(sourceSystem, normalizedMessageType),
-            "FX" => ((FxTradeAdapter)adapter).CanHandle(sourceSystem, normalizedMessageType),
-            "OPTION" => ((OptionTradeAdapter)adapter).CanHandle(sourceSystem, normalizedMessageType),
+            "EQUITY" => _equityAdapter.CanHandle(sourceSystem, normalizedMessageType),
+            "FX" => _fxAdapter.CanHandle(sourceSystem, normalizedMessageType),
+            "OPTION" => _optionAdapter.CanHandle(sourceSystem, normalizedMessageType),
             _ => false
         };
     }

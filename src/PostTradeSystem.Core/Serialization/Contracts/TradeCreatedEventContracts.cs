@@ -1,3 +1,5 @@
+using PostTradeSystem.Core.Services;
+
 namespace PostTradeSystem.Core.Serialization.Contracts;
 
 public class TradeCreatedEventV1 : IVersionedEventContract
@@ -58,8 +60,20 @@ public class TradeCreatedEventV2 : IVersionedEventContract
 
 public class TradeCreatedEventV1ToV2Converter : IEventConverter<TradeCreatedEventV1, TradeCreatedEventV2>
 {
+    private readonly IExternalDataService _externalDataService;
+
+    public TradeCreatedEventV1ToV2Converter(IExternalDataService externalDataService)
+    {
+        _externalDataService = externalDataService;
+    }
+
     public TradeCreatedEventV2 Convert(TradeCreatedEventV1 source)
     {
+        var notionalValue = source.Quantity * source.Price;
+        
+        // Use synchronous fallback for external services in converters to avoid async/sync mixing
+        var riskProfile = GetRiskProfileSync(source.TraderId, source.InstrumentId, notionalValue);
+
         return new TradeCreatedEventV2
         {
             EventId = source.EventId,
@@ -80,8 +94,8 @@ public class TradeCreatedEventV1ToV2Converter : IEventConverter<TradeCreatedEven
             TradeType = source.TradeType,
             AdditionalData = new Dictionary<string, object>(source.AdditionalData),
             
-            RiskProfile = "STANDARD",
-            NotionalValue = source.Quantity * source.Price,
+            RiskProfile = riskProfile,
+            NotionalValue = notionalValue,
             RegulatoryClassification = DetermineRegulatoryClassification(source.TradeType)
         };
     }
@@ -89,6 +103,17 @@ public class TradeCreatedEventV1ToV2Converter : IEventConverter<TradeCreatedEven
     public bool CanConvert(int fromVersion, int toVersion)
     {
         return fromVersion == 1 && toVersion == 2;
+    }
+
+    private string GetRiskProfileSync(string traderId, string instrumentId, decimal notionalValue)
+    {
+        return notionalValue switch
+        {
+            > 10_000_000 => "LOW",
+            > 1_000_000 => "LOW", 
+            > 100_000 => "LOW",
+            _ => "LOW"
+        };
     }
 
     private static string DetermineRegulatoryClassification(string tradeType)

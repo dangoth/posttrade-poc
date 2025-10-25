@@ -46,7 +46,6 @@ public class SerializationManagementService : ISerializationManagementService
             var eventType = GetEventTypeName(domainEvent);
             var schemaVersion = targetSchemaVersion ?? _registry.GetLatestSchemaVersion(eventType);
             
-            // Debug: Check if contract type exists for this version
             var contractType = _registry.GetContractType(eventType, schemaVersion);
             if (contractType == null)
             {
@@ -60,8 +59,6 @@ public class SerializationManagementService : ISerializationManagementService
             var validationResult = ValidateEventData(eventType, jsonData, schemaVersion);
             if (!validationResult.IsValid)
             {
-                // Log warning but don't fail serialization in case schemas aren't fully initialized
-                System.Diagnostics.Debug.WriteLine($"Schema validation warning: {validationResult.ErrorMessage}");
             }
             
             var serializedEvent = new SerializedEvent(
@@ -91,7 +88,6 @@ public class SerializationManagementService : ISerializationManagementService
                     $"No contract registered for event type '{serializedEvent.EventType}' schema version {serializedEvent.SchemaVersion}");
             }
 
-            // Skip validation during deserialization to avoid circular dependencies
             var contract = (IVersionedEventContract)JsonSerializer.Deserialize(serializedEvent.Data, contractType, _jsonOptions)!;
             if (contract == null)
             {
@@ -244,10 +240,11 @@ public class SerializationManagementService : ISerializationManagementService
 
     private async Task RegisterEventConvertersAsync()
     {
-        _registry.RegisterConverter<TradeCreatedEventV1, TradeCreatedEventV2>(new TradeCreatedEventV1ToV2Converter());
-        _registry.RegisterConverter<TradeCreatedEventV2, TradeCreatedEventV1>(new TradeCreatedEventV2ToV1Converter());
-        _registry.RegisterConverter<TradeStatusChangedEventV1, TradeStatusChangedEventV2>(new TradeStatusChangedEventV1ToV2Converter());
-        _registry.RegisterConverter<TradeStatusChangedEventV2, TradeStatusChangedEventV1>(new TradeStatusChangedEventV2ToV1Converter());
+        var mockExternalDataService = new DeterministicMockExternalDataService();
+        _registry.RegisterConverter(new TradeCreatedEventV1ToV2Converter(mockExternalDataService));
+        _registry.RegisterConverter(new TradeCreatedEventV2ToV1Converter());
+        _registry.RegisterConverter(new TradeStatusChangedEventV1ToV2Converter(mockExternalDataService));
+        _registry.RegisterConverter(new TradeStatusChangedEventV2ToV1Converter());
 
         await Task.CompletedTask;
     }

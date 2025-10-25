@@ -1,5 +1,6 @@
 using PostTradeSystem.Core.Adapters;
 using PostTradeSystem.Core.Messages;
+using PostTradeSystem.Core.Services;
 using Xunit;
 
 namespace PostTradeSystem.Core.Tests.Adapters;
@@ -10,7 +11,8 @@ public class EquityTradeAdapterTests
 
     public EquityTradeAdapterTests()
     {
-        _adapter = new EquityTradeAdapter();
+        var mockExternalDataService = new DeterministicMockExternalDataService();
+        _adapter = new EquityTradeAdapter(mockExternalDataService);
     }
 
     [Fact]

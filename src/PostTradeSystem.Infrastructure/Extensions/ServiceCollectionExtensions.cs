@@ -44,10 +44,29 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IEventStoreRepository, EventStoreRepository>();
         services.AddScoped<IOutboxService, OutboxService>();
         services.AddScoped<IRetryService, RetryService>();
+        // Register individual adapters with external data service dependency
+        services.AddScoped<EquityTradeAdapter>();
+        services.AddScoped<FxTradeAdapter>();
+        services.AddScoped<OptionTradeAdapter>();
         services.AddScoped<ITradeMessageAdapterFactory, TradeMessageAdapterFactory>();
         services.AddScoped<IMessageRouter, MessageRouter>();
         services.AddScoped<ITradeRiskService, TradeRiskService>();
         services.AddScoped<IPositionAggregationService, PositionAggregationService>();
+        
+        // External data services for Step 7
+        services.AddScoped<MockExternalDataService>();
+        services.AddScoped<IExternalDataService>(provider => 
+        {
+            var mockService = provider.GetRequiredService<MockExternalDataService>();
+            var configurableService = new ConfigurableExternalDataService(mockService);
+            
+            // Configure with reasonable defaults for production-like simulation
+            configurableService.ConfigureLatency(TimeSpan.FromMilliseconds(50), TimeSpan.FromMilliseconds(200));
+            configurableService.ConfigureFailureRate(0.02); // 2% failure rate
+            configurableService.ConfigureCircuitBreaker(3, TimeSpan.FromMinutes(2));
+            
+            return configurableService;
+        });
         
         services.AddHostedService<DatabaseMigrationService>();
         services.AddHostedService<SerializationInitializationService>();

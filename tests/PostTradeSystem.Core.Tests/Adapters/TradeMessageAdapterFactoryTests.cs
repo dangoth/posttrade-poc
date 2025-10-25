@@ -2,6 +2,7 @@ using Microsoft.Extensions.Logging;
 using Moq;
 using PostTradeSystem.Core.Adapters;
 using PostTradeSystem.Core.Messages;
+using PostTradeSystem.Core.Services;
 using System.Text.Json;
 using Xunit;
 
@@ -15,7 +16,13 @@ public class TradeMessageAdapterFactoryTests
     public TradeMessageAdapterFactoryTests()
     {
         _mockLogger = new Mock<ILogger<TradeMessageAdapterFactory>>();
-        _factory = new TradeMessageAdapterFactory(_mockLogger.Object);
+        var mockExternalDataService = new DeterministicMockExternalDataService();
+        
+        var equityAdapter = new EquityTradeAdapter(mockExternalDataService);
+        var fxAdapter = new FxTradeAdapter(mockExternalDataService);
+        var optionAdapter = new OptionTradeAdapter(mockExternalDataService);
+        
+        _factory = new TradeMessageAdapterFactory(_mockLogger.Object, equityAdapter, fxAdapter, optionAdapter);
     }
 
     [Fact]

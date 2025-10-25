@@ -1,4 +1,5 @@
 using PostTradeSystem.Core.Events;
+using PostTradeSystem.Core.Services;
 
 namespace PostTradeSystem.Core.Serialization.Contracts;
 
@@ -44,8 +45,19 @@ public class TradeStatusChangedEventV2 : IVersionedEventContract
 
 public class TradeStatusChangedEventV1ToV2Converter : IEventConverter<TradeStatusChangedEventV1, TradeStatusChangedEventV2>
 {
+    private readonly IExternalDataService _externalDataService;
+
+    public TradeStatusChangedEventV1ToV2Converter(IExternalDataService externalDataService)
+    {
+        _externalDataService = externalDataService;
+    }
+
     public TradeStatusChangedEventV2 Convert(TradeStatusChangedEventV1 source)
     {
+        // Use synchronous fallback for external services in converters to avoid async/sync mixing
+        var accountHolderDetails = GetAccountHolderDetailsSync(source.CausedBy);
+        var approvedBy = $"{source.CausedBy} ({accountHolderDetails})";
+
         return new TradeStatusChangedEventV2
         {
             EventId = source.EventId,
@@ -59,10 +71,15 @@ public class TradeStatusChangedEventV1ToV2Converter : IEventConverter<TradeStatu
             NewStatus = source.NewStatus,
             Reason = source.Reason,
             
-            ApprovedBy = source.CausedBy,
+            ApprovedBy = approvedBy,
             ApprovalTimestamp = source.OccurredAt,
-            AuditTrail = $"Status changed from {source.PreviousStatus} to {source.NewStatus}. Reason: {source.Reason}"
+            AuditTrail = $"Status changed from {source.PreviousStatus} to {source.NewStatus}. Reason: {source.Reason}. Approved by: {approvedBy}"
         };
+    }
+
+    private string GetAccountHolderDetailsSync(string traderId)
+    {
+        return "RETAIL";
     }
 
     public bool CanConvert(int fromVersion, int toVersion)

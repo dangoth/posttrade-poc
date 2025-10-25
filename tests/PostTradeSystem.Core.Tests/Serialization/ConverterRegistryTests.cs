@@ -1,5 +1,6 @@
 using PostTradeSystem.Core.Serialization;
 using PostTradeSystem.Core.Serialization.Contracts;
+using PostTradeSystem.Core.Services;
 using Xunit;
 
 namespace PostTradeSystem.Core.Tests.Serialization;
@@ -16,7 +17,8 @@ public class ConverterRegistryTests
     [Fact]
     public void RegisterConverter_WithValidConverter_RegistersSuccessfully()
     {
-        var converter = new TradeCreatedEventV1ToV2Converter();
+        var mockExternalDataService = new DeterministicMockExternalDataService();
+        var converter = new TradeCreatedEventV1ToV2Converter(mockExternalDataService);
 
         _registry.RegisterConverter<TradeCreatedEventV1, TradeCreatedEventV2>(converter);
 
@@ -26,7 +28,8 @@ public class ConverterRegistryTests
     [Fact]
     public void Convert_WithRegisteredConverter_ConvertsSuccessfully()
     {
-        var converter = new TradeCreatedEventV1ToV2Converter();
+        var mockExternalDataService = new MockExternalDataService();
+        var converter = new TradeCreatedEventV1ToV2Converter(mockExternalDataService);
         _registry.RegisterConverter<TradeCreatedEventV1, TradeCreatedEventV2>(converter);
 
         var source = new TradeCreatedEventV1

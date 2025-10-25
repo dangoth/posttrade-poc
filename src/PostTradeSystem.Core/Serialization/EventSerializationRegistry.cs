@@ -156,9 +156,10 @@ public class EventSerializationRegistry
             if (!_versions.TryGetValue(targetSchemaVersion, out var versionInfo))
             {
                 var availableVersions = string.Join(", ", _versions.Keys);
+                throw new ArgumentException($"Schema version {targetSchemaVersion} not supported. Available versions: [{availableVersions}]");
             }
 
-            var converter = versionInfo!.FromDomainEvent;
+            var converter = versionInfo.FromDomainEvent;
             var method = converter.GetType().GetMethod("Invoke");
             
             try
@@ -168,10 +169,6 @@ public class EventSerializationRegistry
             }
             catch (Exception ex)
             {
-                if (ex.InnerException != null)
-                {
-                    System.Diagnostics.Debug.WriteLine($"[EventTypeRegistry] Inner exception: {ex.InnerException.Message}");
-                }
                 throw;
             }
         }

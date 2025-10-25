@@ -66,7 +66,7 @@ public class EventSerializationTests
         var contractV2 = JsonSerializer.Deserialize<TradeCreatedEventV2>(serialized.Data, jsonOptions);
         
         contractV2.Should().NotBeNull();
-        contractV2!.RiskProfile.Should().Be("STANDARD");
+        contractV2!.RiskProfile.Should().Be("LOW");
         contractV2.NotionalValue.Should().Be(1000000m);
         contractV2.RegulatoryClassification.Should().Be("MiFID_II_EQUITY");
     }
@@ -152,13 +152,13 @@ public class EventSerializationTests
             TradeType = "EQUITY"
         };
 
-        var converter = new TradeCreatedEventV1ToV2Converter();
+        var converter = new TradeCreatedEventV1ToV2Converter(new DeterministicMockExternalDataService());
 
         var v2Contract = converter.Convert(v1Contract);
 
         v2Contract.SchemaVersion.Should().Be(2);
-        v2Contract.RiskProfile.Should().Be("STANDARD");
-        v2Contract.NotionalValue.Should().Be(100000m); // 500 * 200
+        v2Contract.RiskProfile.Should().Be("LOW");
+        v2Contract.NotionalValue.Should().Be(100000m);
         v2Contract.RegulatoryClassification.Should().Be("MiFID_II_EQUITY");
         
         v2Contract.TraderId.Should().Be(v1Contract.TraderId);

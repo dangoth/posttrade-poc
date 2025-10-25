@@ -1,17 +1,36 @@
 using PostTradeSystem.Core.Events;
 using PostTradeSystem.Core.Messages;
+using PostTradeSystem.Core.Services;
 
 namespace PostTradeSystem.Core.Adapters;
 
 public class EquityTradeAdapter : ITradeMessageAdapter<EquityTradeMessage>
 {
+    private readonly IExternalDataService _externalDataService;
+
+    public EquityTradeAdapter(IExternalDataService externalDataService)
+    {
+        _externalDataService = externalDataService;
+    }
+
     public string SourceSystem => "EQUITY_SYSTEM";
     public string MessageType => "EQUITY";
 
-    public Task<TradeCreatedEvent?> AdaptToEventAsync(TradeMessageEnvelope<EquityTradeMessage> envelope, string correlationId)
+    public async Task<TradeCreatedEvent?> AdaptToEventAsync(TradeMessageEnvelope<EquityTradeMessage> envelope, string correlationId)
     {
         if (envelope?.Payload == null)
-            return Task.FromResult<TradeCreatedEvent?>(null);
+            return null;
+
+        var notionalValue = envelope.Payload.Quantity * envelope.Payload.Price;
+
+        // Enrich with external data services
+        var riskProfile = await _externalDataService.GetRiskAssessmentScoreAsync(
+            envelope.Payload.TraderId, envelope.Payload.InstrumentId, notionalValue);
+        var accountHolderDetails = await _externalDataService.GetAccountHolderDetailsAsync(envelope.Payload.TraderId);
+        var isCompliant = await _externalDataService.ValidateRegulatoryComplianceAsync(
+            "EQUITY", envelope.Payload.CounterpartyId, notionalValue);
+        var volatilityFactor = await _externalDataService.GetMarketDataEnrichmentAsync(
+            envelope.Payload.InstrumentId, envelope.Payload.TradeDateTime);
 
         var additionalData = new Dictionary<string, object>
         {
@@ -21,7 +40,13 @@ public class EquityTradeAdapter : ITradeMessageAdapter<EquityTradeMessage>
             ["DividendRate"] = envelope.Payload.DividendRate,
             ["Isin"] = envelope.Payload.Isin ?? string.Empty,
             ["MarketSegment"] = envelope.Payload.MarketSegment ?? string.Empty,
-            ["SourceSystem"] = envelope.Payload.SourceSystem ?? string.Empty
+            ["SourceSystem"] = envelope.Payload.SourceSystem ?? string.Empty,
+            // External enrichment data
+            ["RiskProfile"] = riskProfile,
+            ["AccountHolderType"] = accountHolderDetails,
+            ["RegulatoryCompliant"] = isCompliant,
+            ["VolatilityFactor"] = volatilityFactor,
+            ["NotionalValue"] = notionalValue
         };
 
         var tradeEvent = new TradeCreatedEvent(
@@ -40,7 +65,7 @@ public class EquityTradeAdapter : ITradeMessageAdapter<EquityTradeMessage>
             "KafkaConsumerService",
             additionalData);
 
-        return Task.FromResult<TradeCreatedEvent?>(tradeEvent);
+        return tradeEvent;
     }
 
     public bool CanHandle(string sourceSystem, string messageType)
